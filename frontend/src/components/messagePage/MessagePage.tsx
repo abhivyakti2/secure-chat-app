@@ -27,6 +27,8 @@ interface MessagePageProps {
     onSendMessage: () => void;
     setIsShowEditGroupChat: (isShowEditGroupChat: boolean) => void;
     setCurrentChat: (chat: ChatDTO | null) => void;
+    missingKeysBanner?: boolean;
+    setMissingKeysBanner?: (val: boolean) => void;
 }
 
 const MessagePage = (props: MessagePageProps) => {

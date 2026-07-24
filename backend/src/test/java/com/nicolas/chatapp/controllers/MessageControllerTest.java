@@ -62,7 +62,7 @@ class MessageControllerTest extends AbstractIntegrationTest {
         assert response != null;
         String authorization = JwtConstants.TOKEN_PREFIX + response.token();
         String content = "Yea sorry to tell you!";
-        SendMessageRequestDTO dto = new SendMessageRequestDTO(vaderAndLukesChatId, content);
+        SendMessageRequestDTO dto = new SendMessageRequestDTO(vaderAndLukesChatId, content, null, null);
         User vader = userService.findUserById(vadersId);
         Chat chat = chatService.findChatById(vaderAndLukesChatId);
         ResponseEntity<MessageDTO> message = messageController.sendMessage(dto, authorization);
@@ -76,7 +76,7 @@ class MessageControllerTest extends AbstractIntegrationTest {
         assertThat(MessageDTO.fromMessages(chat.getMessages())).contains(message.getBody());
 
         // Message to non-existing chat
-        SendMessageRequestDTO request2 = new SendMessageRequestDTO(notExistingId, "Should not work");
+        SendMessageRequestDTO request2 = new SendMessageRequestDTO(notExistingId, "Should not work", null, null);
         assertThrows(ChatException.class, () -> messageController.sendMessage(request2, authorization));
     }
 

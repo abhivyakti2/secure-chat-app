@@ -8,6 +8,9 @@ export interface MessageDTO {
     timeStamp: string;
     user: UserDTO;
     readBy: UUID[];
+    iv?: string | null;
+    encryptedAesKeys?: Record<string, string> | null;
+    isEncrypted?: boolean;
 }
 
 export interface WebSocketMessageDTO {
@@ -16,11 +19,16 @@ export interface WebSocketMessageDTO {
     timeStamp: string;
     user: UserDTO;
     chat: ChatDTO;
+    iv?: string | null;
+    encryptedAesKeys?: Record<string, string> | null;
+    isEncrypted?: boolean;
 }
 
 export interface SendMessageRequestDTO {
     chatId: UUID;
     content: string;
+    iv?: string | null;
+    encryptedAesKeys?: Record<string, string> | null;
 }
 
 export type MessageReducerState = {

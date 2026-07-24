@@ -3,10 +3,10 @@ import React, {useEffect, useState} from "react";
 import {NavigateFunction, useNavigate} from "react-router-dom";
 import {useDispatch, useSelector} from "react-redux";
 import {AppDispatch, RootState} from "../redux/Store";
-import {TOKEN} from "../config/Config";
+import {BASE_API_URL, TOKEN} from "../config/Config";
 import EditGroupChat from "./editChat/EditGroupChat";
 import Profile from "./profile/Profile";
-import {Avatar, Divider, IconButton, InputAdornment, Menu, MenuItem, TextField} from "@mui/material";
+import {Alert, Avatar, Divider, IconButton, InputAdornment, Menu, MenuItem, TextField} from "@mui/material";
 import ChatIcon from '@mui/icons-material/Chat';
 import MoreVertIcon from '@mui/icons-material/MoreVert';
 import {currentUser, logoutUser} from "../redux/auth/AuthAction";
@@ -25,6 +25,8 @@ import {Client, over, Subscription} from "stompjs";
 import {AUTHORIZATION_PREFIX} from "../redux/Constants";
 import CreateGroupChat from "./editChat/CreateGroupChat";
 import CreateSingleChat from "./editChat/CreateSingleChat";
+import CryptoService from "../services/CryptoService";
+import KeyManagementService from "../services/KeyManagementService";
 
 const Homepage = () => {
 
@@ -49,6 +51,7 @@ const Homepage = () => {
     const [isConnected, setIsConnected] = useState<boolean>(false);
     const [messageReceived, setMessageReceived] = useState<boolean>(false);
     const [subscribeTry, setSubscribeTry] = useState<number>(1);
+    const [missingKeysBanner, setMissingKeysBanner] = useState<boolean>(false);
     const open = Boolean(anchor);
 
     useEffect(() => {
@@ -147,10 +150,50 @@ const Homepage = () => {
         setMessageReceived(true);
     };
 
-    const onSendMessage = () => {
-        if (currentChat?.id && token) {
-            dispatch(createMessage({chatId: currentChat.id, content: newMessage}, token));
+    const onSendMessage = async () => {
+        if (!currentChat?.id || !token || !authState.reqUser || !newMessage.trim()) return;
+
+        try {
+            // Collect all chat member user IDs (including sender)
+            const memberIds: string[] = currentChat.users.map(u => u.id.toString());
+            const myUserId = authState.reqUser.id.toString();
+
+            // Fetch public keys via batch endpoint
+            const idsParam = memberIds.join(',');
+            const keysRes = await fetch(`${BASE_API_URL}/api/users/public-keys?userIds=${idsParam}`, {
+                headers: {
+                    Authorization: `${AUTHORIZATION_PREFIX}${token}`,
+                },
+            });
+            const publicKeysMap: Record<string, string> = await keysRes.json();
+
+            // Check all members have a public key
+            const recipients: { userId: string; publicKey: string }[] = [];
+            for (const memberId of memberIds) {
+                if (publicKeysMap[memberId]) {
+                    recipients.push({ userId: memberId, publicKey: publicKeysMap[memberId] });
+                }
+            }
+
+            if (recipients.length !== memberIds.length) {
+                setMissingKeysBanner(true);
+                setTimeout(() => setMissingKeysBanner(false), 5000);
+                return;
+            }
+
+            // Hybrid encrypt
+            const encrypted = await CryptoService.hybridEncrypt(newMessage.trim(), recipients);
+
+            // Send encrypted payload
+            dispatch(createMessage({
+                chatId: currentChat.id,
+                content: encrypted.ciphertext,
+                iv: encrypted.iv,
+                encryptedAesKeys: encrypted.encryptedAesKeys,
+            }, token));
             setNewMessage("");
+        } catch (error) {
+            console.error('Failed to encrypt and send message:', error);
         }
     };
 
@@ -303,6 +346,11 @@ const Homepage = () => {
                             </div>}
                     </div>
                     <div className={styles.messagesContainer}>
+                        {missingKeysBanner && (
+                            <Alert severity="warning" sx={{ position: 'absolute', top: 0, left: 0, right: 0, zIndex: 1000 }}>
+                                One or more chat members are missing a public key. Message cannot be encrypted and sent until all members have uploaded a public key.
+                            </Alert>
+                        )}
                         {!currentChat && <WelcomePage reqUser={authState.reqUser}/>}
                         {currentChat && <MessagePage
                             chat={currentChat}

@@ -4,3 +4,7 @@ export const REQ_USER = "REQ_USER";
 export const SEARCH_USER = "SEARCH_USER";
 export const UPDATE_USER = "UPDATE_USER";
 export const LOGOUT_USER = "LOGOUT_USER";
+export const UPLOAD_PUBLIC_KEY = "UPLOAD_PUBLIC_KEY";
+export const FETCH_PUBLIC_KEY = "FETCH_PUBLIC_KEY";
+export const FETCH_ALL_PUBLIC_KEYS = "FETCH_ALL_PUBLIC_KEYS";
+export const CHANGE_PASSWORD = "CHANGE_PASSWORD";

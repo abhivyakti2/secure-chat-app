@@ -1,6 +1,7 @@
 package com.nicolas.chatapp.controllers;
 
 import com.nicolas.chatapp.config.JwtConstants;
+import com.nicolas.chatapp.dto.request.PublicKeyRequestDTO;
 import com.nicolas.chatapp.dto.request.UpdateUserRequestDTO;
 import com.nicolas.chatapp.dto.response.ApiResponseDTO;
 import com.nicolas.chatapp.dto.response.UserDTO;
@@ -13,8 +14,12 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
+import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
+import java.util.UUID;
 
 @Slf4j
 @RestController
@@ -65,4 +70,42 @@ public class UserController {
         return new ResponseEntity<>(response, HttpStatus.OK);
     }
 
+    @PutMapping("/public-key")
+    public ResponseEntity<ApiResponseDTO> updatePublicKey(@RequestBody PublicKeyRequestDTO request,
+                                                           @RequestHeader(JwtConstants.TOKEN_HEADER) String token)
+            throws UserException {
+
+        User user = userService.findUserByProfile(token);
+        userService.updatePublicKey(user.getId(), request.publicKey());
+        log.info("Public key updated for user: {}", user.getEmail());
+
+        ApiResponseDTO response = ApiResponseDTO.builder()
+                .message("Public key updated")
+                .status(true)
+                .build();
+
+        return new ResponseEntity<>(response, HttpStatus.OK);
+    }
+
+    @GetMapping("/{userId}/public-key")
+    public ResponseEntity<String> getPublicKey(@PathVariable UUID userId) throws UserException {
+
+        Optional<String> key = userService.getUserPublicKey(userId);
+
+        return key.map(k -> new ResponseEntity<>(k, HttpStatus.OK))
+                .orElseGet(() -> new ResponseEntity<>(HttpStatus.NO_CONTENT));
+    }
+
+    // Batch endpoint — fetch all chat members' keys in ONE call before encrypting a message.
+    // Usage: GET /api/users/public-keys?userIds=uuid1,uuid2,uuid3
+    @GetMapping("/public-keys")
+    public ResponseEntity<Map<UUID, String>> getPublicKeys(@RequestParam("userIds") List<UUID> userIds)
+            throws UserException {
+
+        Map<UUID, String> keys = userService.getUserPublicKeys(new HashSet<>(userIds));
+
+        return new ResponseEntity<>(keys, HttpStatus.OK);
+    }
+
 }
+

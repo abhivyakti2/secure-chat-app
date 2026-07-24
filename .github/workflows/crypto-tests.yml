@@ -1,0 +1,47 @@
+name: Crypto Tests
+
+on:
+  pull_request:
+    paths:
+      - "frontend/src/services/CryptoService.ts"
+      - "frontend/src/services/KeyManagementService.ts"
+      - "frontend/src/services/KeyStorageService.ts"
+      - "frontend/src/services/RecoveryService.ts"
+      - "frontend/src/__tests__/crypto/**"
+  push:
+    branches: [main]
+    paths:
+      - "frontend/src/services/CryptoService.ts"
+      - "frontend/src/services/KeyManagementService.ts"
+      - "frontend/src/services/KeyStorageService.ts"
+      - "frontend/src/services/RecoveryService.ts"
+      - "frontend/src/__tests__/crypto/**"
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: ./frontend
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: "npm"
+          cache-dependency-path: ./frontend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run E2EE crypto tests
+        run: npx react-scripts test --watchAll=false --testPathPattern="__tests__/crypto/"
+
+      - name: Build frontend (compilation check)
+        run: npm run build
+

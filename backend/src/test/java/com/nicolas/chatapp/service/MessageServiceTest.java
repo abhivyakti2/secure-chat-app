@@ -42,7 +42,7 @@ class MessageServiceTest extends AbstractIntegrationTest {
     void sendMessage() throws ChatException, UserException, MessageException {
 
         String content = "Yea sorry to tell you!";
-        SendMessageRequestDTO request = new SendMessageRequestDTO(vaderAndLukesChatId, content);
+        SendMessageRequestDTO request = new SendMessageRequestDTO(vaderAndLukesChatId, content, null, null);
         User vader = userService.findUserById(vadersId);
         Chat chat = chatService.findChatById(vaderAndLukesChatId);
         Message message = messageService.sendMessage(request, vadersId);
@@ -59,7 +59,7 @@ class MessageServiceTest extends AbstractIntegrationTest {
         assertThrows(UserException.class, () -> messageService.sendMessage(request, notExistingId));
 
         // Message to non-existing chat
-        SendMessageRequestDTO request2 = new SendMessageRequestDTO(notExistingId, "Should not work");
+        SendMessageRequestDTO request2 = new SendMessageRequestDTO(notExistingId, "Should not work", null, null);
         assertThrows(ChatException.class, () -> messageService.sendMessage(request2, lukesId));
     }
 

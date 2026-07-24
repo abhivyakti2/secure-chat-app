@@ -8,6 +8,9 @@ const initialState: AuthReducerState = {
     reqUser: null,
     searchUser: null,
     updateUser: null,
+    uploadedPublicKey: null,
+    fetchedPublicKey: null,
+    passwordChanged: null,
 };
 
 const authReducer = (state: AuthReducerState = initialState, action: Action): AuthReducerState => {
@@ -22,8 +25,16 @@ const authReducer = (state: AuthReducerState = initialState, action: Action): Au
             return {...state, searchUser: action.payload};
         case actionTypes.UPDATE_USER:
             return {...state, updateUser: action.payload};
+        case actionTypes.UPLOAD_PUBLIC_KEY:
+            return {...state, uploadedPublicKey: action.payload};
+        case actionTypes.FETCH_PUBLIC_KEY:
+            return {...state, fetchedPublicKey: action.payload};
+        case actionTypes.FETCH_ALL_PUBLIC_KEYS:
+            return {...state};
+        case actionTypes.CHANGE_PASSWORD:
+            return {...state, passwordChanged: action.payload};
         case actionTypes.LOGOUT_USER:
-            return {...state, signin: null, signup: null, reqUser: null};
+            return {...state, signin: null, signup: null, reqUser: null, uploadedPublicKey: null, fetchedPublicKey: null, passwordChanged: null};
     }
     return state;
 };

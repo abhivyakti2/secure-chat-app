@@ -35,6 +35,15 @@ public class Message {
     @ElementCollection
     private Set<UUID> readBy = new HashSet<>();
 
+    private String iv;
+
+    @Column(columnDefinition = "TEXT")
+    private String encryptedAesKeys;
+
+    @Builder.Default
+    @Column(nullable = false)
+    private boolean isEncrypted = false;
+
     @Override
     public boolean equals(Object obj) {
         if (this == obj) {

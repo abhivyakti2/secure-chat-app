@@ -5,6 +5,9 @@ import com.nicolas.chatapp.exception.UserException;
 import com.nicolas.chatapp.model.User;
 
 import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 
 public interface UserService {
@@ -19,4 +22,11 @@ public interface UserService {
 
     List<User> searchUserByName(String name);
 
+    void updatePublicKey(UUID userId, String publicKey) throws UserException;
+
+    Optional<String> getUserPublicKey(UUID userId) throws UserException;
+
+    Map<UUID, String> getUserPublicKeys(Set<UUID> userIds) throws UserException;
+
 }
+

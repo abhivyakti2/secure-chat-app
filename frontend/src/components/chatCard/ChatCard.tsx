@@ -1,11 +1,13 @@
 import {Avatar, Badge} from "@mui/material";
-import React from "react";
+import React, {useEffect, useState} from "react";
 import {getChatName, getInitialsFromName, transformDateToString} from "../utils/Utils";
 import styles from './ChatCard.module.scss';
 import {ChatDTO} from "../../redux/chat/ChatModel";
 import {useSelector} from "react-redux";
 import {RootState} from "../../redux/Store";
 import {MessageDTO} from "../../redux/message/MessageModel";
+import CryptoService from "../../services/CryptoService";
+import KeyManagementService from "../../services/KeyManagementService";
 
 interface ChatCardProps {
     chat: ChatDTO;
@@ -14,12 +16,56 @@ interface ChatCardProps {
 const ChatCard = (props: ChatCardProps) => {
 
     const authState = useSelector((state: RootState) => state.auth);
+    const [decryptedPreview, setDecryptedPreview] = useState<string | null>(null);
 
     const name: string = getChatName(props.chat, authState.reqUser);
     const initials: string = getInitialsFromName(name);
     const sortedMessages: MessageDTO[] = props.chat.messages.sort((a, b) => +new Date(a.timeStamp) - +new Date(b.timeStamp));
     const lastMessage: MessageDTO | undefined = sortedMessages.length > 0 ? sortedMessages[sortedMessages.length - 1] : undefined;
-    const lastMessageContent: string = lastMessage ? lastMessage.content.length > 25 ? lastMessage.content.slice(0, 25) + "..." : lastMessage.content : "";
+
+    useEffect(() => {
+        if (!lastMessage || !authState.reqUser) {
+            setDecryptedPreview(null);
+            return;
+        }
+
+        // If not encrypted, use content as-is
+        if (!lastMessage.isEncrypted) {
+            setDecryptedPreview(lastMessage.content);
+            return;
+        }
+
+        // Attempt to decrypt the last message for preview
+        const myUserId = authState.reqUser.id.toString();
+        const myEncryptedKey = lastMessage.encryptedAesKeys?.[myUserId];
+
+        if (!myEncryptedKey || !lastMessage.iv) {
+            setDecryptedPreview("🔒");
+            return;
+        }
+
+        let cancelled = false;
+        const doDecrypt = async () => {
+            try {
+                const privateKey = KeyManagementService.getCachedPrivateKey();
+                const plaintext = await CryptoService.hybridDecrypt(
+                    lastMessage.content,
+                    lastMessage.iv!,
+                    myEncryptedKey,
+                    privateKey
+                );
+                if (!cancelled) setDecryptedPreview(plaintext);
+            } catch {
+                if (!cancelled) setDecryptedPreview("🔒");
+            }
+        };
+        doDecrypt();
+
+        return () => { cancelled = true; };
+    }, [lastMessage, authState.reqUser]);
+
+    const previewText = decryptedPreview ?? lastMessage?.content ?? "";
+    const lastMessageContent: string = previewText.length > 25 ? previewText.slice(0, 25) + "..." : previewText;
     const lastMessageName: string = lastMessage ? lastMessage.user.fullName === authState.reqUser?.fullName ? "You" : lastMessage.user.fullName : "";
     const lastMessageString: string = lastMessage ? lastMessageName + ": " + lastMessageContent : "";
     const lastDate: string = lastMessage ? transformDateToString(new Date(lastMessage.timeStamp)) : "";

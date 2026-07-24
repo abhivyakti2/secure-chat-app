@@ -13,8 +13,9 @@ export interface UpdateUserRequestDTO {
 }
 
 export interface LoginResponseDTO {
-    token: string,
+    token: string | null,
     isAuthenticated: boolean,
+    lockoutTimeRemainingMinutes?: number | null,
 }
 
 export interface LoginRequestDTO {
@@ -26,6 +27,7 @@ export interface UserDTO {
     id: UUID,
     email: string,
     fullName: string,
+    publicKey?: string | null,
 }
 
 export interface AuthenticationErrorDTO {
@@ -38,10 +40,22 @@ export interface ApiResponseDTO {
     status: boolean,
 }
 
+export interface PublicKeyDTO {
+    publicKey: string;
+}
+
+export interface PasswordChangeRequestDTO {
+    oldPassword: string;
+    newPassword: string;
+}
+
 export type AuthReducerState = {
     signin: LoginResponseDTO | null,
     signup: LoginResponseDTO | null,
     reqUser: UserDTO | null,
     searchUser: UserDTO[] | null,
     updateUser: ApiResponseDTO | null,
+    uploadedPublicKey: ApiResponseDTO | null,
+    fetchedPublicKey: string | null,
+    passwordChanged: ApiResponseDTO | null,
 }

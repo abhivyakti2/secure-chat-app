@@ -1,5 +1,6 @@
 package com.nicolas.chatapp.service.implementation;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.nicolas.chatapp.dto.request.SendMessageRequestDTO;
 import com.nicolas.chatapp.exception.ChatException;
 import com.nicolas.chatapp.exception.MessageException;
@@ -16,10 +17,13 @@ import org.springframework.stereotype.Service;
 
 import java.time.LocalDateTime;
 import java.util.*;
+import java.util.stream.Collectors;
 
 @Service
 @RequiredArgsConstructor
 public class MessageServiceImpl implements MessageService {
+
+    private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
 
     private final UserService userService;
     private final ChatService chatService;
@@ -31,14 +35,35 @@ public class MessageServiceImpl implements MessageService {
         User user = userService.findUserById(userId);
         Chat chat = chatService.findChatById(req.chatId());
 
-        Message message = Message.builder()
+        boolean isEncrypted = req.encryptedAesKeys() != null && !req.encryptedAesKeys().isEmpty();
+
+        Message.MessageBuilder builder = Message.builder()
                 .chat(chat)
                 .user(user)
                 .content(req.content())
                 .timeStamp(LocalDateTime.now())
                 .readBy(new HashSet<>(Set.of(user.getId())))
-                .build();
+                .isEncrypted(isEncrypted);
 
+        if (isEncrypted) {
+            Set<String> currentMemberIds = chat.getUsers().stream()
+                    .map(m -> m.getId().toString())
+                    .collect(Collectors.toSet());
+            Set<String> receivedIds = req.encryptedAesKeys().keySet();
+
+            if (!receivedIds.equals(currentMemberIds)) {
+                throw new ChatException("encryptedAesKeys must contain a key for every current chat member, and no others");
+            }
+
+            try {
+                builder.encryptedAesKeys(OBJECT_MAPPER.writeValueAsString(req.encryptedAesKeys()));
+            } catch (Exception e) {
+                throw new ChatException("Failed to serialize encrypted AES keys");
+            }
+            builder.iv(req.iv());
+        }
+
+        Message message = builder.build();
         chat.getMessages().add(message);
 
         return messageRepository.save(message);
@@ -82,3 +107,4 @@ public class MessageServiceImpl implements MessageService {
     }
 
 }
+
