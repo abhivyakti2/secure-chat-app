@@ -6,6 +6,7 @@ import com.nicolas.chatapp.controllers.AuthController;
 import com.nicolas.chatapp.controllers.UserController;
 import com.nicolas.chatapp.dto.request.LoginRequestDTO;
 import com.nicolas.chatapp.dto.request.UpdateUserRequestDTO;
+import org.springframework.mock.web.MockHttpServletResponse;
 import com.nicolas.chatapp.dto.response.LoginResponseDTO;
 import com.nicolas.chatapp.exception.UserException;
 import com.nicolas.chatapp.model.User;
@@ -49,7 +50,7 @@ class UserServiceTest extends AbstractIntegrationTest {
         // Get user
         String mail = "luke.skywalker@test.com";
         LoginRequestDTO request = new LoginRequestDTO(mail, "1234");
-        LoginResponseDTO response = authController.login(request).getBody();
+LoginResponseDTO response = authController.login(request, new MockHttpServletResponse()).getBody();
         assert response != null;
         String authorization = JwtConstants.TOKEN_PREFIX + response.token();
         User user = userService.findUserByProfile(authorization);
@@ -70,7 +71,7 @@ class UserServiceTest extends AbstractIntegrationTest {
         String name = "Anakin Skywalker";
         String mail = "darth.vader@test.com";
         String password = "2345";
-        UpdateUserRequestDTO request = new UpdateUserRequestDTO(mail, password, name);
+        UpdateUserRequestDTO request = new UpdateUserRequestDTO(mail, password, name, null);
         User user = userService.updateUser(vadersId, request);
         User repositoryUser = userService.findUserById(vadersId);
         assertThat(user.getId()).isEqualTo(vadersId);

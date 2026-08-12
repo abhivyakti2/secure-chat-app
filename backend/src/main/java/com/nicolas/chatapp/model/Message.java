@@ -37,8 +37,18 @@ public class Message {
 
     private String iv;
 
+    /**
+     * JSON-encoded ratchet header for Double Ratchet messages.
+     * Present when encryptionFormat is "ratchet".
+     */
     @Column(columnDefinition = "TEXT")
-    private String encryptedAesKeys;
+    private String ratchetHeader;
+
+    /**
+     * Encryption format identifier.
+     * Only "ratchet" is used for new messages.
+     */
+    private String encryptionFormat;
 
     @Builder.Default
     @Column(nullable = false)

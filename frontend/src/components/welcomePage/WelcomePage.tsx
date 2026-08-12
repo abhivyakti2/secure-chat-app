@@ -16,7 +16,6 @@ const WelcomePage = (props: WelcomePageProps) => {
                     height: '10rem',
                 }}/>
                 <h1>Welcome, {props.reqUser?.fullName}!</h1>
-                <p>Chat App designed and developed by Nicolas Justen.</p>
                 <p style={{fontSize: "0.85rem", color: "#888", marginTop: "1rem"}}>
                     📱 Encrypted chats are currently only accessible on the device where you signed up. Multi-device support is coming.
                 </p>

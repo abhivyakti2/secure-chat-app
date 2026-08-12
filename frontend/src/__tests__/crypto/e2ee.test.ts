@@ -1,9 +1,17 @@
 /**
  * Jest port of e2eeSmokeTest.ts — run on CI to catch crypto regressions.
  * Uses in-memory key storage mock instead of IndexedDB.
+ *
+ * NOTE: The legacy RSA hybrid-encryption path has been removed. Message
+ * encryption now uses the Double Ratchet (X3DH) via SessionRatchetService,
+ * which requires pre-key bundles and two users. This test suite therefore
+ * covers the Curve25519 identity-key lifecycle and password-protected
+ * at-rest bundle handling that the app services expose directly.
  */
+import KeyManagementService from "../../services/KeyManagementService";
 import CryptoService from "../../services/CryptoService";
-import KeyStorageService, { StoredKeyRecord } from "../../services/KeyStorageService";
+import KeyStorageService from "../../services/KeyStorageService";
+import type { StoredKeyRecord } from "../../services/KeyStorageService";
 import RecoveryService from "../../services/RecoveryService";
 
 // In-memory storage for testing (replaces IndexedDB)
@@ -22,6 +30,8 @@ beforeAll(() => {
     (KeyStorageService as any).deleteKeyRecord = async (userId: string) => {
         testStore.delete(userId);
     };
+    (KeyStorageService as any).getOrCreateDeviceId = () => "test-device-1";
+    (KeyStorageService as any).clearAllSessions = async () => {};
 
     // Mock localStorage
     (global as any).localStorage = {
@@ -46,275 +56,119 @@ beforeEach(() => {
     jest.clearAllMocks();
 });
 
-// Simple in-memory KeyManagementService for testing
-function createTestKeyManager() {
-    const privateKeyCache: Map<string, CryptoKey> = new Map();
-    let currentUserId: string | null = null;
-
-    return {
-        async initializeOnSignup(userId: string, password: string): Promise<string> {
-            const { publicKey, privateKey } = await CryptoService.generateRsaKeyPair();
-            const encrypted = await CryptoService.encryptPrivateKey(privateKey, password);
-
-            const record: StoredKeyRecord = {
-                userId,
-                keyVersion: 1,
-                encryptedData: encrypted.encryptedData,
-                iv: encrypted.iv,
-                salt: encrypted.salt,
-                publicKey,
-                createdAt: new Date().toISOString(),
-            };
-            await KeyStorageService.saveKeyRecord(record);
-
-            const imported = await CryptoService.importPrivateKey(privateKey);
-            privateKeyCache.set(userId, imported);
-            currentUserId = userId;
-            return publicKey;
-        },
-
-        async loadOnSignIn(userId: string, password: string): Promise<{ status: "ok" | "new-device"; reason?: string }> {
-            const record = await KeyStorageService.getKeyRecord(userId);
-            if (!record) return { status: "new-device", reason: "no-local-key" };
-
-            try {
-                const privateKeyBase64 = await CryptoService.decryptPrivateKey(
-                    { encryptedData: record.encryptedData, iv: record.iv, salt: record.salt },
-                    password
-                );
-                const imported = await CryptoService.importPrivateKey(privateKeyBase64);
-                privateKeyCache.set(userId, imported);
-                currentUserId = userId;
-                return { status: "ok" };
-            } catch {
-                return { status: "new-device", reason: "decrypt-failed" };
-            }
-        },
-
-        async regenerateKeys(userId: string, password: string): Promise<string> {
-            const existing = testStore.get(userId);
-            const nextVersion = existing ? existing.keyVersion + 1 : 1;
-
-            const { publicKey, privateKey } = await CryptoService.generateRsaKeyPair();
-            const encrypted = await CryptoService.encryptPrivateKey(privateKey, password);
-
-            const record: StoredKeyRecord = {
-                userId,
-                keyVersion: nextVersion,
-                encryptedData: encrypted.encryptedData,
-                iv: encrypted.iv,
-                salt: encrypted.salt,
-                publicKey,
-                createdAt: new Date().toISOString(),
-            };
-            await KeyStorageService.saveKeyRecord(record);
-
-            const imported = await CryptoService.importPrivateKey(privateKey);
-            privateKeyCache.set(userId, imported);
-            currentUserId = userId;
-            return publicKey;
-        },
-
-        getCachedPrivateKey(userId: string): CryptoKey {
-            const key = privateKeyCache.get(userId);
-            if (!key) throw new Error("Private key not loaded");
-            return key;
-        },
-
-        clearOnLogout(): void {
-            privateKeyCache.clear();
-            currentUserId = null;
-        },
-    };
-}
-
-describe("E2EE Cryptographic Lifecycle", () => {
+describe("E2EE Cryptographic Lifecycle (Curve25519 / Double Ratchet)", () => {
     const testUserId = "test-user-123";
     const password = "myTestPassword123";
     const wrongPassword = "wrongPassword";
 
-    let keyManager: ReturnType<typeof createTestKeyManager>;
-    let publicKey: string;
-
-    test("1. Full signup → encrypt → decrypt cycle", async () => {
-        keyManager = createTestKeyManager();
-
-        publicKey = await keyManager.initializeOnSignup(testUserId, password);
+    test("1. Full signup → logout → signin cycle", async () => {
+        const publicKey = await KeyManagementService.initializeOnSignup(testUserId, password);
         expect(publicKey).toBeTruthy();
-        expect(publicKey.length).toBeGreaterThan(100);
+        // Curve25519 public keys are 32 bytes => 44 base64 chars
+        expect(publicKey.length).toBe(44);
 
-        keyManager.clearOnLogout();
+        KeyManagementService.clearOnLogout();
 
-        const loadResult = await keyManager.loadOnSignIn(testUserId, password);
+        const loadResult = await KeyManagementService.loadOnSignIn(testUserId, password);
         expect(loadResult.status).toBe("ok");
 
-        const privateKey = keyManager.getCachedPrivateKey(testUserId);
-        const encrypted = await CryptoService.hybridEncrypt("hello world", [
-            { userId: testUserId, publicKey },
-        ]);
-        expect(encrypted.ciphertext).toBeTruthy();
-        expect(encrypted.iv).toBeTruthy();
-        expect(encrypted.encryptedAesKeys[testUserId]).toBeTruthy();
-
-        const decrypted = await CryptoService.hybridDecrypt(
-            encrypted.ciphertext,
-            encrypted.iv,
-            encrypted.encryptedAesKeys[testUserId],
-            privateKey
-        );
-        expect(decrypted).toBe("hello world");
+        const curve25519PrivateKey = KeyManagementService.getCurve25519PrivateKey();
+        expect(curve25519PrivateKey).toBeTruthy();
+        expect(KeyManagementService.getCurrentUserId()).toBe(testUserId);
     });
 
     test("2. Wrong password triggers new-device flow", async () => {
-        keyManager = createTestKeyManager();
-        publicKey = await keyManager.initializeOnSignup(testUserId, password);
-        keyManager.clearOnLogout();
+        await KeyManagementService.initializeOnSignup(testUserId, password);
+        KeyManagementService.clearOnLogout();
 
-        const wrongPwResult = await keyManager.loadOnSignIn(testUserId, wrongPassword);
+        const wrongPwResult = await KeyManagementService.loadOnSignIn(testUserId, wrongPassword);
         expect(wrongPwResult.status).toBe("new-device");
         expect(wrongPwResult.reason).toBe("decrypt-failed");
     });
 
     test("3. Missing local key triggers new-device (no-local-key)", async () => {
-        keyManager = createTestKeyManager();
-        const result = await keyManager.loadOnSignIn("nonexistent-user", password);
+        const result = await KeyManagementService.loadOnSignIn("nonexistent-user", password);
         expect(result.status).toBe("new-device");
         expect(result.reason).toBe("no-local-key");
     });
 
     test("4. Password change re-wraps same key", async () => {
-        keyManager = createTestKeyManager();
-        publicKey = await keyManager.initializeOnSignup(testUserId, password);
+        await KeyManagementService.initializeOnSignup(testUserId, password);
 
-        const privateKey1 = keyManager.getCachedPrivateKey(testUserId);
-        const encrypted = await CryptoService.hybridEncrypt("test message", [
-            { userId: testUserId, publicKey },
-        ]);
-        const decrypted1 = await CryptoService.hybridDecrypt(
-            encrypted.ciphertext,
-            encrypted.iv,
-            encrypted.encryptedAesKeys[testUserId],
-            privateKey1
-        );
-        expect(decrypted1).toBe("test message");
+        const oldPrivateKey = KeyManagementService.getCurve25519PrivateKey();
+        expect(oldPrivateKey).toBeTruthy();
 
-        const record = await KeyStorageService.getKeyRecord(testUserId);
-        const privateKeyBase64 = await CryptoService.decryptPrivateKey(
-            { encryptedData: record!.encryptedData, iv: record!.iv, salt: record!.salt },
-            password
-        );
-        const newEncrypted = await CryptoService.encryptPrivateKey(privateKeyBase64, "newPassword123");
-        await KeyStorageService.saveKeyRecord({
-            ...record!,
-            encryptedData: newEncrypted.encryptedData,
-            iv: newEncrypted.iv,
-            salt: newEncrypted.salt,
-        });
+        await KeyManagementService.changePassword(testUserId, password, "newPassword123");
 
-        keyManager.clearOnLogout();
-
-        const oldResult = await keyManager.loadOnSignIn(testUserId, password);
+        // Old password should no longer decrypt
+        KeyManagementService.clearOnLogout();
+        const oldResult = await KeyManagementService.loadOnSignIn(testUserId, password);
         expect(oldResult.status).toBe("new-device");
 
-        const newResult = await keyManager.loadOnSignIn(testUserId, "newPassword123");
+        // New password works and yields the SAME key (only re-wrapped)
+        const newResult = await KeyManagementService.loadOnSignIn(testUserId, "newPassword123");
         expect(newResult.status).toBe("ok");
+        expect(KeyManagementService.getCurve25519PrivateKey()).toBe(oldPrivateKey);
+    });
 
-        const privateKey2 = keyManager.getCachedPrivateKey(testUserId);
-        const decrypted2 = await CryptoService.hybridDecrypt(
-            encrypted.ciphertext,
-            encrypted.iv,
-            encrypted.encryptedAesKeys[testUserId],
-            privateKey2
+    test("5. Password-protected at-rest bundle round-trip", async () => {
+        const privateKeyMaterial = "base64curve25519privatekeymaterial";
+        const bundle = await CryptoService.encryptPrivateKey(
+            JSON.stringify({ curve25519PrivateKey: privateKeyMaterial }),
+            password
         );
-        expect(decrypted2).toBe("test message");
+        expect(bundle.encryptedData).toBeTruthy();
+        expect(bundle.iv).toBeTruthy();
+        expect(bundle.salt).toBeTruthy();
+
+        const decrypted = await CryptoService.decryptPrivateKey(bundle, password);
+        expect(JSON.parse(decrypted).curve25519PrivateKey).toBe(privateKeyMaterial);
     });
 
-    test("5. Multi-recipient encryption works", async () => {
-        keyManager = createTestKeyManager();
-
-        const userA = { id: "user-a", pw: "pwA" };
-        const userB = { id: "user-b", pw: "pwB" };
-        const userC = { id: "user-c", pw: "pwC" };
-
-        const pubA = await keyManager.initializeOnSignup(userA.id, userA.pw);
-        keyManager.clearOnLogout();
-        const pubB = await keyManager.initializeOnSignup(userB.id, userB.pw);
-        keyManager.clearOnLogout();
-        const pubC = await keyManager.initializeOnSignup(userC.id, userC.pw);
-        keyManager.clearOnLogout();
-
-        const encrypted = await CryptoService.hybridEncrypt("group message", [
-            { userId: userA.id, publicKey: pubA },
-            { userId: userB.id, publicKey: pubB },
-            { userId: userC.id, publicKey: pubC },
-        ]);
-
-        for (const user of [userA, userB, userC]) {
-            const loadResult = await keyManager.loadOnSignIn(user.id, user.pw);
-            expect(loadResult.status).toBe("ok");
-            const pk = keyManager.getCachedPrivateKey(user.id);
-            const decrypted = await CryptoService.hybridDecrypt(
-                encrypted.ciphertext,
-                encrypted.iv,
-                encrypted.encryptedAesKeys[user.id],
-                pk
-            );
-            expect(decrypted).toBe("group message");
-            keyManager.clearOnLogout();
-        }
-    });
-
-    test("6. Recovery phrase generation and encryption produces valid blob", async () => {
-        // Generate a mnemonic
+    test("6. Recovery phrase generation produces 12 words", async () => {
         const phrase = RecoveryService.generateMnemonic();
         expect(phrase).toBeTruthy();
         const words = phrase.split(/\s+/);
         expect(words.length).toBe(12);
+    });
 
-        // Generate a keypair and encrypt private key with mnemonic
-        const { publicKey, privateKey } = await CryptoService.generateRsaKeyPair();
-        const blob = await RecoveryService.encryptPrivateKeyWithMnemonic(privateKey, phrase);
+test("7. Recovery phrase encryption round-trip", async () => {
+        const phrase = RecoveryService.generateMnemonic();
+        const privateKeyData = "base64curve25519privatekeymaterial";
+        const publicKeyData = "base64curve25519publickeymaterial";
+
+        const blob = await RecoveryService.encryptPrivateKeyWithMnemonic(privateKeyData, publicKeyData, phrase);
         expect(blob.encryptedData).toBeTruthy();
         expect(blob.iv).toBeTruthy();
         expect(blob.salt).toBeTruthy();
 
-        // Decrypt private key with mnemonic
-        const decryptedPrivateKey = await RecoveryService.decryptPrivateKeyWithMnemonic(blob, phrase);
-        expect(decryptedPrivateKey).toBe(privateKey);
-
-        // Verify the decrypted key can still be used for encryption
-        const importedKey = await CryptoService.importPrivateKey(decryptedPrivateKey);
-        const encrypted = await CryptoService.hybridEncrypt("recovery test", [
-            { userId: "recovery-user", publicKey },
-        ]);
-        const decrypted = await CryptoService.hybridDecrypt(
-            encrypted.ciphertext,
-            encrypted.iv,
-            encrypted.encryptedAesKeys["recovery-user"],
-            importedKey
-        );
-        expect(decrypted).toBe("recovery test");
+        const decryptedBundle = await RecoveryService.decryptPrivateKeyWithMnemonic(blob, phrase);
+        const parsed = JSON.parse(decryptedBundle);
+        expect(parsed.curve25519PrivateKey).toBe(privateKeyData);
+        expect(parsed.curve25519PublicKey).toBe(publicKeyData);
     });
 
-    test("7. Wrong recovery phrase fails to decrypt blob", async () => {
+    test("8. Wrong recovery phrase fails to decrypt blob", async () => {
         const correctPhrase = RecoveryService.generateMnemonic();
         const wrongPhrase = "abandon ability able about above absent absorb abstract absurd abuse access accident";
 
-        const { publicKey, privateKey } = await CryptoService.generateRsaKeyPair();
-        const blob = await RecoveryService.encryptPrivateKeyWithMnemonic(privateKey, correctPhrase);
+        const blob = await RecoveryService.encryptPrivateKeyWithMnemonic(
+            "base64curve25519privatekeymaterial",
+            "base64curve25519publickeymaterial",
+            correctPhrase
+        );
 
         await expect(
             RecoveryService.decryptPrivateKeyWithMnemonic(blob, wrongPhrase)
         ).rejects.toThrow();
     });
 
-    test("8. Full recovery flow simulation", async () => {
-        keyManager = createTestKeyManager();
+    test("9. Full recovery flow simulation", async () => {
         const recoveryUserId = "recovery-flow-user";
         const recoveryPassword = "recoveryPass123";
 
         // Signup: generate keys
-        const pubKey = await keyManager.initializeOnSignup(recoveryUserId, recoveryPassword);
+        const pubKey = await KeyManagementService.initializeOnSignup(recoveryUserId, recoveryPassword);
 
         // Generate recovery phrase + blob (as done on signup)
         const phrase = RecoveryService.generateMnemonic();
@@ -326,14 +180,14 @@ describe("E2EE Cryptographic Lifecycle", () => {
             recoveryPassword
         );
 
-        const blob = await RecoveryService.encryptPrivateKeyWithMnemonic(privateKeyBase64, phrase);
+const blob = await RecoveryService.encryptPrivateKeyWithMnemonic(privateKeyBase64, pubKey, phrase);
 
         // Simulate losing local key (clear IndexedDB record)
         testStore.delete(recoveryUserId);
-        keyManager.clearOnLogout();
+        KeyManagementService.clearOnLogout();
 
         // New device — no local key
-        const loadResult = await keyManager.loadOnSignIn(recoveryUserId, recoveryPassword);
+        const loadResult = await KeyManagementService.loadOnSignIn(recoveryUserId, recoveryPassword);
         expect(loadResult.status).toBe("new-device");
         expect(loadResult.reason).toBe("no-local-key");
 
@@ -348,100 +202,31 @@ describe("E2EE Cryptographic Lifecycle", () => {
             iv: reEncrypted.iv,
             salt: reEncrypted.salt,
             publicKey: pubKey,
+            curve25519PublicKey: pubKey,
             createdAt: new Date().toISOString(),
-        });
+        } as StoredKeyRecord);
 
-        // Now we should be able to sign in and decrypt old messages
-        const recoveryResult = await keyManager.loadOnSignIn(recoveryUserId, recoveryPassword);
+        // Now we should be able to sign in and load the recovered key
+        const recoveryResult = await KeyManagementService.loadOnSignIn(recoveryUserId, recoveryPassword);
         expect(recoveryResult.status).toBe("ok");
-
-        // Old messages encrypted with original key should still decrypt
-        const encrypted = await CryptoService.hybridEncrypt("old message", [
-            { userId: recoveryUserId, publicKey: pubKey },
-        ]);
-        const restoredPk = keyManager.getCachedPrivateKey(recoveryUserId);
-        const decrypted = await CryptoService.hybridDecrypt(
-            encrypted.ciphertext,
-            encrypted.iv,
-            encrypted.encryptedAesKeys[recoveryUserId],
-            restoredPk
-        );
-        expect(decrypted).toBe("old message");
+        expect(KeyManagementService.getCurve25519PrivateKey()).toBe(decryptedPk);
     });
 
-    test("9. Key regeneration produces new keys and invalidates old recovery phrase", async () => {
-        keyManager = createTestKeyManager();
+    test("10. Key regeneration produces a new key", async () => {
         const regenUserId = "regen-test-user";
         const regenPassword = "regenPass123";
 
-        // Signup
-        const pubKey1 = await keyManager.initializeOnSignup(regenUserId, regenPassword);
+        const pubKey1 = await KeyManagementService.initializeOnSignup(regenUserId, regenPassword);
+        const privateKey1 = KeyManagementService.getCurve25519PrivateKey();
 
-        // Generate and save a recovery blob (simulates what signup does)
-        const phrase1 = RecoveryService.generateMnemonic();
-        const record1 = await KeyStorageService.getKeyRecord(regenUserId);
-        const pk1 = await CryptoService.decryptPrivateKey(
-            { encryptedData: record1!.encryptedData, iv: record1!.iv, salt: record1!.salt },
-            regenPassword
-        );
-        const blob1 = await RecoveryService.encryptPrivateKeyWithMnemonic(pk1, phrase1);
-
-        // Encrypt a message with the original key
-        const encrypted = await CryptoService.hybridEncrypt("pre-regen message", [
-            { userId: regenUserId, publicKey: pubKey1 },
-        ]);
-
-        // Regenerate keys (simulates Profile.tsx flow)
-        const pubKey2 = await keyManager.regenerateKeys(regenUserId, regenPassword);
+        const pubKey2 = await KeyManagementService.regenerateKeys(regenUserId, regenPassword);
         expect(pubKey2).not.toBe(pubKey1); // Must be a different key
-
-        // Generate new recovery phrase + blob for the new keys
-        const phrase2 = RecoveryService.generateMnemonic();
-        const record2 = await KeyStorageService.getKeyRecord(regenUserId);
-        const pk2 = await CryptoService.decryptPrivateKey(
-            { encryptedData: record2!.encryptedData, iv: record2!.iv, salt: record2!.salt },
-            regenPassword
-        );
-        const blob2 = await RecoveryService.encryptPrivateKeyWithMnemonic(pk2, phrase2);
-        expect(phrase2).not.toBe(phrase1); // Different phrase
-
-        // Old phrase should NOT work with new blob
-        await expect(
-            RecoveryService.decryptPrivateKeyWithMnemonic(blob2, phrase1)
-        ).rejects.toThrow();
-
-        // New phrase should work with new blob
-        const decryptedPk2 = await RecoveryService.decryptPrivateKeyWithMnemonic(blob2, phrase2);
-        expect(decryptedPk2).toBe(pk2);
-
-        // Old message encrypted with old key should NOT decrypt with new key
-        const privateKey2 = keyManager.getCachedPrivateKey(regenUserId);
-        await expect(
-            CryptoService.hybridDecrypt(
-                encrypted.ciphertext,
-                encrypted.iv,
-                encrypted.encryptedAesKeys[regenUserId],
-                privateKey2
-            )
-        ).rejects.toThrow();
-
-        // But new messages with new key should work
-        const newEncrypted = await CryptoService.hybridEncrypt("post-regen message", [
-            { userId: regenUserId, publicKey: pubKey2 },
-        ]);
-        const decryptedNew = await CryptoService.hybridDecrypt(
-            newEncrypted.ciphertext,
-            newEncrypted.iv,
-            newEncrypted.encryptedAesKeys[regenUserId],
-            privateKey2
-        );
-        expect(decryptedNew).toBe("post-regen message");
+        expect(KeyManagementService.getCurve25519PrivateKey()).not.toBe(privateKey1);
     });
 
-    test("10. Recovery phrase shown flag tracking", () => {
+    test("11. Recovery phrase shown flag tracking", () => {
         expect(RecoveryService.hasShownPhrase()).toBe(false);
         RecoveryService.markPhraseShown();
         expect(RecoveryService.hasShownPhrase()).toBe(true);
     });
 });
-

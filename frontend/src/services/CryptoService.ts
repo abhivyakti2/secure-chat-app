@@ -4,7 +4,7 @@
  * ════════════════════════════════════════════════════════════════════════════════
  *
  * This file handles raw cryptographic key material, including:
- *   - RSA private keys (base64 PKCS8)
+ *   - Curve25519 private keys (base64)
  *   - AES symmetric keys (raw bytes)
  *   - Plaintext message content
  *
@@ -22,14 +22,8 @@
  * ════════════════════════════════════════════════════════════════════════════════
  */
 
-const RSA_ALGO = { name: "RSA-OAEP", modulusLength: 2048, publicExponent: new Uint8Array([1, 0, 1]), hash: "SHA-256" };
 const AES_ALGO = { name: "AES-GCM", length: 256 };
 const PBKDF2_ITERATIONS = 600000;
-
-export interface KeyPairBase64 {
-    publicKey: string;  // base64 SPKI — this is what gets uploaded to backend as-is
-    privateKey: string; // base64 PKCS8 — NEVER leaves the browser unencrypted
-}
 
 export interface EncryptedPrivateKeyBundle {
     encryptedData: string;
@@ -37,10 +31,15 @@ export interface EncryptedPrivateKeyBundle {
     salt: string;
 }
 
-export interface HybridEncryptResult {
-    ciphertext: string;
-    iv: string;
-    encryptedAesKeys: Record<string, string>; // userId -> RSA-wrapped AES key (base64)
+/**
+ * Encrypted payload for a private key bundle (a JSON string containing the
+ * Curve25519 private key). Used for at-rest encryption in IndexedDB and for
+ * the recovery blob. Message encryption itself is handled by the Double
+ * Ratchet (see SessionRatchetService).
+ */
+export interface EncryptedKeyBundleInput {
+    /** JSON-serialized Curve25519 private key bundle (not PKCS8 — no RSA) */
+    privateKeyBundleJson: string;
 }
 
 function bufToBase64(buf: ArrayBuffer): string {
@@ -59,56 +58,6 @@ function base64ToBuf(base64: string): ArrayBuffer {
 
 class CryptoService {
 
-    async generateRsaKeyPair(): Promise<KeyPairBase64> {
-        const keyPair = (await crypto.subtle.generateKey(RSA_ALGO, true, ["encrypt", "decrypt"])) as CryptoKeyPair;
-        const publicKeyRaw = await crypto.subtle.exportKey("spki", keyPair.publicKey);
-        const privateKeyRaw = await crypto.subtle.exportKey("pkcs8", keyPair.privateKey);
-        return { publicKey: bufToBase64(publicKeyRaw), privateKey: bufToBase64(privateKeyRaw) };
-    }
-
-    async importPublicKey(base64Spki: string): Promise<CryptoKey> {
-        return crypto.subtle.importKey("spki", base64ToBuf(base64Spki), RSA_ALGO, true, ["encrypt"]);
-    }
-
-    async importPrivateKey(base64Pkcs8: string): Promise<CryptoKey> {
-        return crypto.subtle.importKey("pkcs8", base64ToBuf(base64Pkcs8), RSA_ALGO, true, ["decrypt"]);
-    }
-
-    // aesKey never leaves this function in raw form except wrapped per-recipient — that's the whole point of hybrid encryption
-    async hybridEncrypt(plaintext: string, recipients: { userId: string; publicKey: string }[]): Promise<HybridEncryptResult> {
-        if (recipients.length === 0) throw new Error("hybridEncrypt: no recipients supplied");
-
-        const aesKey = await crypto.subtle.generateKey(AES_ALGO, true, ["encrypt", "decrypt"]);
-        const iv = crypto.getRandomValues(new Uint8Array(12));
-        const encoded = new TextEncoder().encode(plaintext);
-        const ciphertextBuf = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, aesKey, encoded);
-        const rawAesKey = await crypto.subtle.exportKey("raw", aesKey);
-
-        const encryptedAesKeys: Record<string, string> = {};
-        for (const recipient of recipients) {
-            const pubKey = await this.importPublicKey(recipient.publicKey);
-            const wrapped = await crypto.subtle.encrypt({ name: "RSA-OAEP" }, pubKey, rawAesKey);
-            encryptedAesKeys[recipient.userId] = bufToBase64(wrapped);
-        }
-
-        return {
-            ciphertext: bufToBase64(ciphertextBuf),
-            iv: bufToBase64(iv.buffer),
-            encryptedAesKeys,
-        };
-    }
-
-    async hybridDecrypt(ciphertext: string, iv: string, encryptedAesKeyForUser: string, privateKey: CryptoKey): Promise<string> {
-        const rawAesKey = await crypto.subtle.decrypt({ name: "RSA-OAEP" }, privateKey, base64ToBuf(encryptedAesKeyForUser));
-        const aesKey = await crypto.subtle.importKey("raw", rawAesKey, AES_ALGO, false, ["decrypt"]);
-        const plaintextBuf = await crypto.subtle.decrypt(
-            { name: "AES-GCM", iv: base64ToBuf(iv) },
-            aesKey,
-            base64ToBuf(ciphertext)
-        );
-        return new TextDecoder().decode(plaintextBuf);
-    }
-
     private async deriveKeyFromPassword(password: string, salt: Uint8Array): Promise<CryptoKey> {
         const passwordKey = await crypto.subtle.importKey("raw", new TextEncoder().encode(password), "PBKDF2", false, ["deriveKey"]);
         return crypto.subtle.deriveKey(
@@ -120,14 +69,14 @@ class CryptoService {
         );
     }
 
-    async encryptPrivateKey(privateKeyBase64Pkcs8: string, password: string): Promise<EncryptedPrivateKeyBundle> {
+async encryptPrivateKey(privateKeyBundleJson: string, password: string): Promise<EncryptedPrivateKeyBundle> {
         const salt = crypto.getRandomValues(new Uint8Array(16));
         const iv = crypto.getRandomValues(new Uint8Array(12));
         const derivedKey = await this.deriveKeyFromPassword(password, salt);
         const encryptedBuf = await crypto.subtle.encrypt(
             { name: "AES-GCM", iv },
             derivedKey,
-            base64ToBuf(privateKeyBase64Pkcs8)
+            new TextEncoder().encode(privateKeyBundleJson)
         );
         return {
             encryptedData: bufToBase64(encryptedBuf),
@@ -145,7 +94,7 @@ class CryptoService {
             derivedKey,
             base64ToBuf(bundle.encryptedData)
         );
-        return bufToBase64(decryptedBuf);
+        return new TextDecoder().decode(decryptedBuf);
     }
 }
 

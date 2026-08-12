@@ -6,8 +6,7 @@ import {ChatDTO} from "../../redux/chat/ChatModel";
 import {useSelector} from "react-redux";
 import {RootState} from "../../redux/Store";
 import {MessageDTO} from "../../redux/message/MessageModel";
-import CryptoService from "../../services/CryptoService";
-import KeyManagementService from "../../services/KeyManagementService";
+import SessionRatchetService from "../../services/SessionRatchetService";
 
 interface ChatCardProps {
     chat: ChatDTO;
@@ -29,30 +28,52 @@ const ChatCard = (props: ChatCardProps) => {
             return;
         }
 
-        // If not encrypted, use content as-is
         if (!lastMessage.isEncrypted) {
-            setDecryptedPreview(lastMessage.content);
+            setDecryptedPreview(lastMessage.content ?? "");
             return;
         }
 
-        // Attempt to decrypt the last message for preview
-        const myUserId = authState.reqUser.id.toString();
-        const myEncryptedKey = lastMessage.encryptedAesKeys?.[myUserId];
-
-        if (!myEncryptedKey || !lastMessage.iv) {
+        if (!lastMessage.ratchetHeader) {
             setDecryptedPreview("🔒");
             return;
+        }
+
+        const isOwnMessage = lastMessage.user.id === authState.reqUser.id;
+        const localPlaintext = (lastMessage as MessageDTO & { __localPlaintext?: string }).__localPlaintext;
+
+        if (isOwnMessage) {
+            if (localPlaintext) {
+                setDecryptedPreview(localPlaintext);
+                return;
+            }
+
+            let cancelled = false;
+            const loadCachedOwnMessage = async () => {
+                try {
+                    const cached = await SessionRatchetService.getCachedOwnMessage(lastMessage.id.toString());
+                    if (!cancelled) {
+                        if (cached) {
+                            setDecryptedPreview(cached);
+                        } else {
+                            setDecryptedPreview("🔒");
+                        }
+                    }
+                } catch {
+                    if (!cancelled) setDecryptedPreview("🔒");
+                }
+            };
+            loadCachedOwnMessage();
+            return () => { cancelled = true; };
         }
 
         let cancelled = false;
         const doDecrypt = async () => {
             try {
-                const privateKey = KeyManagementService.getCachedPrivateKey();
-                const plaintext = await CryptoService.hybridDecrypt(
-                    lastMessage.content,
-                    lastMessage.iv!,
-                    myEncryptedKey,
-                    privateKey
+                const plaintext = await SessionRatchetService.ratchetDecrypt(
+                    lastMessage.ratchetHeader!,
+                    lastMessage.content ?? "",
+                    lastMessage.user.id.toString(),
+                    lastMessage.id.toString()
                 );
                 if (!cancelled) setDecryptedPreview(plaintext);
             } catch {

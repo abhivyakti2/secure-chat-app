@@ -1,10 +1,9 @@
-import {TOKEN, BASE_API_URL} from "../../config/Config";
+import {TOKEN} from "../../config/Config";
 import {useDispatch, useSelector} from "react-redux";
 import {AuthReducerState, LoginRequestDTO} from "../../redux/auth/AuthModel";
 import {useNavigate} from "react-router-dom";
-import React, {Dispatch, useCallback, useEffect, useState} from "react";
+import React, {Dispatch, useCallback, useEffect, useRef, useState} from "react";
 import {currentUser, loginUser} from "../../redux/auth/AuthAction";
-import {AUTHORIZATION_PREFIX} from "../../redux/Constants";
 import {RootState} from "../../redux/Store";
 import {Button, Dialog, DialogActions, DialogContent, DialogContentText, DialogTitle, TextField} from "@mui/material";
 import styles from "./Register.module.scss";
@@ -30,6 +29,7 @@ const SignIn = () => {
     const dispatch: Dispatch<any> = useDispatch();
     const token: string | null = localStorage.getItem(TOKEN);
     const state: AuthReducerState = useSelector((state: RootState) => state.auth);
+    const handledLoginTokenRef = useRef<string | null>(null);
 
     useEffect(() => {
         if (token) {
@@ -47,6 +47,13 @@ const SignIn = () => {
             );
             setShowNewDeviceDialog(true);
         } else {
+            try {
+                await KeyManagementService.uploadPreKeyBundle(jwtToken);
+            } catch (error) {
+                console.error("Failed to upload pre-key bundle after sign-in:", error);
+                setErrorMessage("Signed in, but encryption setup could not publish your pre-key bundle. Please try signing in again.");
+                return;
+            }
             navigate("/");
         }
     }, [navigate]);
@@ -54,7 +61,8 @@ const SignIn = () => {
     useEffect(() => {
         if (state.signin && state.signin.isAuthenticated && state.reqUser) {
             const jwtToken = state.signin.token || token;
-            if (jwtToken) {
+            if (jwtToken && handledLoginTokenRef.current !== jwtToken) {
+                handledLoginTokenRef.current = jwtToken;
                 handleLoginSuccess(state.reqUser.id.toString(), signInData.password, jwtToken);
             }
         }
@@ -130,10 +138,10 @@ const SignIn = () => {
         const oldRecord = await KeyStorageService.getKeyRecord(userId);
         setNewDeviceLoading(true);
         try {
-            // Step 1: Generate new keypair in memory only (not persisted to IndexedDB).
-            // Atomicity guarantee: if blob upload or public key upload fails, IndexedDB
+// Step 1: Generate new keypair in memory only (not persisted to IndexedDB).
+            // Atomicity guarantee: if blob upload or pre-key bundle upload fails, IndexedDB
             // still holds the old record (or no record, which is fine for a new device).
-            const { publicKey, record: newRecord } = await KeyManagementService.regenerateKeysWithoutPersist(userId, signInData.password);
+            const { record: newRecord } = await KeyManagementService.regenerateKeysWithoutPersist(userId, signInData.password);
 
             // Step 2: Generate new recovery phrase + blob
             const phrase = RecoveryService.generateMnemonic();
@@ -142,23 +150,14 @@ const SignIn = () => {
                 { encryptedData: newRecord.encryptedData, iv: newRecord.iv, salt: newRecord.salt },
                 signInData.password
             );
-            const recoveryBlob = await RecoveryService.encryptPrivateKeyWithMnemonic(privateKeyBase64, phrase);
+const publicKeyBase64 = newRecord.curve25519PublicKey || newRecord.publicKey || "";
+            const recoveryBlob = await RecoveryService.encryptPrivateKeyWithMnemonic(privateKeyBase64, publicKeyBase64, phrase);
 
-            // Step 3: Upload recovery blob FIRST (before public key)
+            // Step 3: Upload recovery blob FIRST (before pre-key bundle)
             await RecoveryService.uploadRecoveryBlob(recoveryBlob, token);
 
-            // Step 4: Upload new public key SECOND (awaited, not fire-and-forget dispatch)
-            const pubKeyRes = await fetch(`${BASE_API_URL}/api/users/public-key`, {
-                method: "PUT",
-                headers: {
-                    "Content-Type": "application/json",
-                    Authorization: `${AUTHORIZATION_PREFIX}${token}`,
-                },
-                body: JSON.stringify({ publicKey }),
-            });
-            if (!pubKeyRes.ok) {
-                throw new Error("Failed to upload new public key");
-            }
+            // Step 4: Upload the new pre-key bundle SECOND (awaited, not fire-and-forget dispatch)
+            await KeyManagementService.uploadPreKeyBundle(token);
 
             // Step 5: BOTH network calls succeeded — NOW persist to IndexedDB (atomic commit)
             await KeyManagementService.persistKeyRecord(newRecord);

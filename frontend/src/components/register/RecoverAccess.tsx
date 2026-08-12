@@ -6,7 +6,6 @@ import {AuthReducerState} from "../../redux/auth/AuthModel";
 import {TOKEN} from "../../config/Config";
 import {currentUser} from "../../redux/auth/AuthAction";
 import RecoveryService from "../../services/RecoveryService";
-import KeyManagementService from "../../services/KeyManagementService";
 import {Button, TextField, Alert, CircularProgress} from "@mui/material";
 import styles from "./Register.module.scss";
 
@@ -51,9 +50,8 @@ const RecoverAccess = () => {
             const userId = auth.reqUser.id.toString();
             await RecoveryService.recoverAccess(trimmedPhrase, newPassword, userId, token);
 
-            // Upload new public key if needed (re-wrap doesn't change keys, but ensure it's uploaded)
-            const publicKey = KeyManagementService.getCachedPrivateKey();
-            // Just signal success — keys are restored locally and password is changed
+            // Keys are restored locally (Curve25519 re-wrapped with the new password) and
+            // the ratchet is re-initialized via loadOnSignIn inside recoverAccess.
             setSuccess("Access recovered successfully! Your encryption keys have been restored with your new password.");
 
             // Navigate home after delay

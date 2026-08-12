@@ -4,6 +4,7 @@ import com.nicolas.chatapp.AbstractIntegrationTest;
 import com.nicolas.chatapp.config.JwtConstants;
 import com.nicolas.chatapp.dto.request.LoginRequestDTO;
 import com.nicolas.chatapp.dto.request.UpdateUserRequestDTO;
+import org.springframework.mock.web.MockHttpServletResponse;
 import com.nicolas.chatapp.dto.response.ApiResponseDTO;
 import com.nicolas.chatapp.dto.response.LoginResponseDTO;
 import com.nicolas.chatapp.dto.response.UserDTO;
@@ -36,10 +37,10 @@ class UserControllerTest extends AbstractIntegrationTest {
 
     @Test
     void getUserProfile() throws UserException {
-        // Get user
+// Get user
         String mail = "luke.skywalker@test.com";
         LoginRequestDTO request = new LoginRequestDTO(mail, "1234");
-        LoginResponseDTO response = authController.login(request).getBody();
+        LoginResponseDTO response = authController.login(request, new MockHttpServletResponse()).getBody();
         assert response != null;
         String authorization = JwtConstants.TOKEN_PREFIX + response.token();
         ResponseEntity<UserDTO> result = userController.getUserProfile(authorization);
@@ -57,10 +58,10 @@ class UserControllerTest extends AbstractIntegrationTest {
     @Test
     void searchUsers() throws UserException {
 
-        // Search user by name
+// Search user by name
         String mail = "luke.skywalker@test.com";
         LoginRequestDTO request = new LoginRequestDTO(mail, "1234");
-        LoginResponseDTO response = authController.login(request).getBody();
+        LoginResponseDTO response = authController.login(request, new MockHttpServletResponse()).getBody();
         assert response != null;
         String authorization = JwtConstants.TOKEN_PREFIX + response.token();
         ResponseEntity<UserDTO> luke = userController.getUserProfile(authorization);
@@ -77,10 +78,10 @@ class UserControllerTest extends AbstractIntegrationTest {
     @Test
     void searchUsersByName() throws UserException {
 
-        // Search user by name
+// Search user by name
         String mail = "luke.skywalker@test.com";
         LoginRequestDTO request = new LoginRequestDTO(mail, "1234");
-        LoginResponseDTO response = authController.login(request).getBody();
+        LoginResponseDTO response = authController.login(request, new MockHttpServletResponse()).getBody();
         assert response != null;
         String authorization = JwtConstants.TOKEN_PREFIX + response.token();
         ResponseEntity<UserDTO> luke = userController.getUserProfile(authorization);
@@ -95,11 +96,11 @@ class UserControllerTest extends AbstractIntegrationTest {
         String name = "Anakin Skywalker";
         String mail = "darth.vader@test.com";
         String password = "2345";
-        LoginRequestDTO loginRequest = new LoginRequestDTO(mail, "2345");
-        LoginResponseDTO response = authController.login(loginRequest).getBody();
+LoginRequestDTO loginRequest = new LoginRequestDTO(mail, "2345");
+        LoginResponseDTO response = authController.login(loginRequest, new MockHttpServletResponse()).getBody();
         assert response != null;
         String authorization = JwtConstants.TOKEN_PREFIX + response.token();
-        UpdateUserRequestDTO request = new UpdateUserRequestDTO(mail, password, name);
+        UpdateUserRequestDTO request = new UpdateUserRequestDTO(mail, password, name, null);
         ResponseEntity<ApiResponseDTO> user = userController.updateUser(request, authorization);
         ResponseEntity<UserDTO> repositoryUser = userController.getUserProfile(authorization);
         assertThat(user.getStatusCode()).isEqualTo(HttpStatus.OK);

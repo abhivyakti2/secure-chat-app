@@ -2,9 +2,8 @@ import React, {Dispatch, useEffect, useState} from "react";
 import {useDispatch, useSelector} from "react-redux";
 import {RootState} from "../../redux/Store";
 import {AuthReducerState, UpdateUserRequestDTO, PasswordChangeRequestDTO} from "../../redux/auth/AuthModel";
-import {TOKEN, BASE_API_URL} from "../../config/Config";
+import {TOKEN} from "../../config/Config";
 import {changePassword, currentUser, updateUser} from "../../redux/auth/AuthAction";
-import {AUTHORIZATION_PREFIX} from "../../redux/Constants";
 import WestIcon from '@mui/icons-material/West';
 import {Avatar, Button, Dialog, DialogActions, DialogContent, DialogContentText, DialogTitle, IconButton, TextField} from "@mui/material";
 import CreateIcon from '@mui/icons-material/Create';
@@ -137,36 +136,27 @@ const Profile = (props: ProfileProps) => {
         try {
             const userId = auth.reqUser.id.toString();
 
-            // Step 1: Generate new keypair in memory only.
+// Step 1: Generate new keypair in memory only.
             // NOT persisted to IndexedDB yet — this is atomicity guarantee #1.
             // If any subsequent step fails, IndexedDB still holds the old key record.
-            const { publicKey, record: newRecord } = await KeyManagementService.regenerateKeysWithoutPersist(userId, regenPassword);
+            const { record: newRecord } = await KeyManagementService.regenerateKeysWithoutPersist(userId, regenPassword);
 
             // Step 2: Generate new 12-word recovery phrase + encrypted recovery blob
             const phrase = RecoveryService.generateMnemonic();
-            const privateKeyBase64 = await CryptoService.decryptPrivateKey(
+const privateKeyBase64 = await CryptoService.decryptPrivateKey(
                 { encryptedData: newRecord.encryptedData, iv: newRecord.iv, salt: newRecord.salt },
                 regenPassword
             );
-            const recoveryBlob = await RecoveryService.encryptPrivateKeyWithMnemonic(privateKeyBase64, phrase);
+            const publicKeyBase64 = newRecord.curve25519PublicKey || newRecord.publicKey || "";
+            const recoveryBlob = await RecoveryService.encryptPrivateKeyWithMnemonic(privateKeyBase64, publicKeyBase64, phrase);
 
-            // Step 3: Upload recovery blob FIRST (before public key).
-            // Ordering guarantee: if this fails, the old public key on the server still
+            // Step 3: Upload recovery blob FIRST (before pre-key bundle).
+            // Ordering guarantee: if this fails, the old pre-key bundle on the server still
             // has a valid recovery path for its matching old private key.
             await RecoveryService.uploadRecoveryBlob(recoveryBlob, token);
 
-            // Step 4: Upload new public key to backend AFTER blob upload succeeds.
-            const pubKeyRes = await fetch(`${BASE_API_URL}/api/users/public-key`, {
-                method: "PUT",
-                headers: {
-                    "Content-Type": "application/json",
-                    Authorization: `${AUTHORIZATION_PREFIX}${token}`,
-                },
-                body: JSON.stringify({ publicKey }),
-            });
-            if (!pubKeyRes.ok) {
-                throw new Error("Failed to upload new public key");
-            }
+            // Step 4: Upload the new pre-key bundle to backend AFTER blob upload succeeds.
+            await KeyManagementService.uploadPreKeyBundle(token);
 
             // Step 5: BOTH network calls succeeded.
             // NOW persist the new key record to IndexedDB — atomic commit point.

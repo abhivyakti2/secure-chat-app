@@ -5,12 +5,12 @@ import {Action} from "../CommonModel";
 const initialState: AuthReducerState = {
     signin: null,
     signup: null,
-    reqUser: null,
+reqUser: null,
     searchUser: null,
     updateUser: null,
-    uploadedPublicKey: null,
-    fetchedPublicKey: null,
     passwordChanged: null,
+    pendingEmail: null,
+    otpVerification: null,
 };
 
 const authReducer = (state: AuthReducerState = initialState, action: Action): AuthReducerState => {
@@ -23,18 +23,14 @@ const authReducer = (state: AuthReducerState = initialState, action: Action): Au
             return {...state, reqUser: action.payload};
         case actionTypes.SEARCH_USER:
             return {...state, searchUser: action.payload};
-        case actionTypes.UPDATE_USER:
+case actionTypes.UPDATE_USER:
             return {...state, updateUser: action.payload};
-        case actionTypes.UPLOAD_PUBLIC_KEY:
-            return {...state, uploadedPublicKey: action.payload};
-        case actionTypes.FETCH_PUBLIC_KEY:
-            return {...state, fetchedPublicKey: action.payload};
-        case actionTypes.FETCH_ALL_PUBLIC_KEYS:
-            return {...state};
         case actionTypes.CHANGE_PASSWORD:
             return {...state, passwordChanged: action.payload};
+        case actionTypes.VERIFY_OTP:
+            return {...state, otpVerification: action.payload};
         case actionTypes.LOGOUT_USER:
-            return {...state, signin: null, signup: null, reqUser: null, uploadedPublicKey: null, fetchedPublicKey: null, passwordChanged: null};
+            return {...state, signin: null, signup: null, reqUser: null, passwordChanged: null, pendingEmail: null, otpVerification: null};
     }
     return state;
 };

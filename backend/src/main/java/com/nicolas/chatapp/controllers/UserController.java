@@ -1,11 +1,13 @@
 package com.nicolas.chatapp.controllers;
 
 import com.nicolas.chatapp.config.JwtConstants;
-import com.nicolas.chatapp.dto.request.PublicKeyRequestDTO;
+import com.nicolas.chatapp.dto.request.PreKeyBundleRequestDTO;
+import com.nicolas.chatapp.dto.request.PreKeyConsumeRequestDTO;
 import com.nicolas.chatapp.dto.request.UpdateUserRequestDTO;
 import com.nicolas.chatapp.dto.response.ApiResponseDTO;
 import com.nicolas.chatapp.dto.response.UserDTO;
 import com.nicolas.chatapp.exception.UserException;
+import com.nicolas.chatapp.model.PreKeyBundle;
 import com.nicolas.chatapp.model.User;
 import com.nicolas.chatapp.service.UserService;
 import lombok.RequiredArgsConstructor;
@@ -14,9 +16,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
-import java.util.HashSet;
 import java.util.List;
-import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
@@ -70,42 +70,85 @@ public class UserController {
         return new ResponseEntity<>(response, HttpStatus.OK);
     }
 
-    @PutMapping("/public-key")
-    public ResponseEntity<ApiResponseDTO> updatePublicKey(@RequestBody PublicKeyRequestDTO request,
-                                                           @RequestHeader(JwtConstants.TOKEN_HEADER) String token)
-            throws UserException {
+// ──────────────────────────────────────────────────────────────
+    // Pre-Key Bundle Endpoints (X3DH / Double Ratchet)
+    // ──────────────────────────────────────────────────────────────
+
+    /**
+     * Upload or replace the current user's X3DH pre-key bundle.
+     * Called after signup and periodically when one-time pre-keys run low.
+     */
+    @PutMapping("/pre-key-bundle")
+    public ResponseEntity<ApiResponseDTO> updatePreKeyBundle(
+            @RequestBody PreKeyBundleRequestDTO request,
+            @RequestHeader(JwtConstants.TOKEN_HEADER) String token) throws UserException {
 
         User user = userService.findUserByProfile(token);
-        userService.updatePublicKey(user.getId(), request.publicKey());
-        log.info("Public key updated for user: {}", user.getEmail());
+        userService.updatePreKeyBundle(user.getId(), request);
+        log.info("Pre-key bundle uploaded for user: {}", user.getEmail());
 
         ApiResponseDTO response = ApiResponseDTO.builder()
-                .message("Public key updated")
+                .message("Pre-key bundle updated")
                 .status(true)
                 .build();
 
         return new ResponseEntity<>(response, HttpStatus.OK);
     }
 
-    @GetMapping("/{userId}/public-key")
-    public ResponseEntity<String> getPublicKey(@PathVariable UUID userId) throws UserException {
+    /**
+     * Fetch a user's pre-key bundle to initiate an X3DH session.
+     * Returns the bundle including one-time pre-keys, or 204 No Content if none exists.
+     */
+    @GetMapping("/{userId}/pre-key-bundle")
+    public ResponseEntity<PreKeyBundleResponse> getPreKeyBundle(@PathVariable UUID userId) throws UserException {
 
-        Optional<String> key = userService.getUserPublicKey(userId);
+        Optional<PreKeyBundle> bundle = userService.getPreKeyBundle(userId);
 
-        return key.map(k -> new ResponseEntity<>(k, HttpStatus.OK))
+        return bundle.map(b -> {
+            PreKeyBundleResponse resp = new PreKeyBundleResponse(
+                    b.getIdentityKey(),
+                    b.getSignedPreKey(),
+                    b.getSignedPreKeySignature(),
+                    b.getSignedPreKeyId(),
+                    b.getOneTimePreKeys()
+            );
+            return new ResponseEntity<>(resp, HttpStatus.OK);
+        }).orElseGet(() -> new ResponseEntity<>(HttpStatus.NO_CONTENT));
+    }
+
+    /**
+     * Atomically consume one one-time pre-key from the target user's pool.
+     * Used during X3DH session initiation.
+     *
+     * POST body includes the sender's userId (for audit logging).
+     * Response contains the consumed key as a JSON string {"id":..., "key":"..."},
+     * or 204 No Content if no one-time pre-keys remain.
+     */
+    @PostMapping("/pre-key-bundle/consume")
+    public ResponseEntity<String> consumeOneTimePreKey(
+            @RequestBody PreKeyConsumeRequestDTO request,
+            @RequestHeader(JwtConstants.TOKEN_HEADER) String token) throws UserException {
+
+        User requester = userService.findUserByProfile(token);
+        Optional<String> consumed = userService.consumeOneTimePreKeyAtomic(request.senderUserId());
+
+        log.info("User {} consumed one-time pre-key for user {}",
+                requester.getId(), request.senderUserId());
+
+        return consumed.map(key -> new ResponseEntity<>(key, HttpStatus.OK))
                 .orElseGet(() -> new ResponseEntity<>(HttpStatus.NO_CONTENT));
     }
 
-    // Batch endpoint — fetch all chat members' keys in ONE call before encrypting a message.
-    // Usage: GET /api/users/public-keys?userIds=uuid1,uuid2,uuid3
-    @GetMapping("/public-keys")
-    public ResponseEntity<Map<UUID, String>> getPublicKeys(@RequestParam("userIds") List<UUID> userIds)
-            throws UserException {
-
-        Map<UUID, String> keys = userService.getUserPublicKeys(new HashSet<>(userIds));
-
-        return new ResponseEntity<>(keys, HttpStatus.OK);
-    }
-
+    /**
+     * Internal response DTO for the pre-key bundle.
+     * Excludes updatedAt and other internal fields.
+     */
+    private record PreKeyBundleResponse(
+            String identityKey,
+            String signedPreKey,
+            String signedPreKeySignature,
+            int signedPreKeyId,
+            String oneTimePreKeys
+    ) {}
 }
 

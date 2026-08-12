@@ -4,6 +4,7 @@ import com.nicolas.chatapp.AbstractIntegrationTest;
 import com.nicolas.chatapp.config.JwtConstants;
 import com.nicolas.chatapp.dto.request.LoginRequestDTO;
 import com.nicolas.chatapp.dto.request.SendMessageRequestDTO;
+import org.springframework.mock.web.MockHttpServletResponse;
 import com.nicolas.chatapp.dto.response.LoginResponseDTO;
 import com.nicolas.chatapp.dto.response.MessageDTO;
 import com.nicolas.chatapp.dto.response.UserDTO;
@@ -58,11 +59,17 @@ class MessageControllerTest extends AbstractIntegrationTest {
 
         String mail = "darth.vader@test.com";
         LoginRequestDTO request = new LoginRequestDTO(mail, "2345");
-        LoginResponseDTO response = authController.login(request).getBody();
+        LoginResponseDTO response = authController.login(request, new MockHttpServletResponse()).getBody();
         assert response != null;
         String authorization = JwtConstants.TOKEN_PREFIX + response.token();
         String content = "Yea sorry to tell you!";
-        SendMessageRequestDTO dto = new SendMessageRequestDTO(vaderAndLukesChatId, content, null, null);
+        SendMessageRequestDTO dto = new SendMessageRequestDTO(
+            vaderAndLukesChatId,
+            content,
+            "ratchet-iv",
+            "{\"type\":1,\"body\":\"ratchet-body\"}",
+            "ratchet"
+        );
         User vader = userService.findUserById(vadersId);
         Chat chat = chatService.findChatById(vaderAndLukesChatId);
         ResponseEntity<MessageDTO> message = messageController.sendMessage(dto, authorization);
@@ -76,7 +83,13 @@ class MessageControllerTest extends AbstractIntegrationTest {
         assertThat(MessageDTO.fromMessages(chat.getMessages())).contains(message.getBody());
 
         // Message to non-existing chat
-        SendMessageRequestDTO request2 = new SendMessageRequestDTO(notExistingId, "Should not work", null, null);
+SendMessageRequestDTO request2 = new SendMessageRequestDTO(
+            notExistingId,
+            "Should not work",
+            "ratchet-iv",
+            "{\"type\":1,\"body\":\"ratchet-body\"}",
+            "ratchet"
+        );
         assertThrows(ChatException.class, () -> messageController.sendMessage(request2, authorization));
     }
 
@@ -86,7 +99,7 @@ class MessageControllerTest extends AbstractIntegrationTest {
         // Get messages for chat
         String mail = "luke.skywalker@test.com";
         LoginRequestDTO request = new LoginRequestDTO(mail, "1234");
-        LoginResponseDTO response = authController.login(request).getBody();
+        LoginResponseDTO response = authController.login(request, new MockHttpServletResponse()).getBody();
         assert response != null;
         String authorization = JwtConstants.TOKEN_PREFIX + response.token();
         Message message1 = messageService.findMessageById(lukeAndLeiaMessage1Id);
@@ -102,7 +115,7 @@ class MessageControllerTest extends AbstractIntegrationTest {
         // Get messages for user not related to chat
         mail = "darth.vader@test.com";
         request = new LoginRequestDTO(mail, "2345");
-        response = authController.login(request).getBody();
+        response = authController.login(request, new MockHttpServletResponse()).getBody();
         assert response != null;
         authorization = JwtConstants.TOKEN_PREFIX + response.token();
         String finalAuthorization1 = authorization;
@@ -115,7 +128,7 @@ class MessageControllerTest extends AbstractIntegrationTest {
         // Delete message
         String mail = "luke.skywalker@test.com";
         LoginRequestDTO request = new LoginRequestDTO(mail, "1234");
-        LoginResponseDTO response = authController.login(request).getBody();
+        LoginResponseDTO response = authController.login(request, new MockHttpServletResponse()).getBody();
         assert response != null;
         String authorization = JwtConstants.TOKEN_PREFIX + response.token();
         messageController.deleteMessage(lukeTheGoodiesMessageId, authorization);

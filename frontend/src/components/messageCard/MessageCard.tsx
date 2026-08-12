@@ -4,8 +4,7 @@ import styles from './MessageCard.module.scss';
 import {Chip} from "@mui/material";
 import React, {useEffect, useState} from "react";
 import {getDateFormat} from "../utils/Utils";
-import CryptoService from "../../services/CryptoService";
-import KeyManagementService from "../../services/KeyManagementService";
+import SessionRatchetService from "../../services/SessionRatchetService";
 import TelemetryService from "../../services/TelemetryService";
 
 interface MessageCardProps {
@@ -26,63 +25,114 @@ const MessageCard = (props: MessageCardProps) => {
     const minutes = date.getMinutes() > 9 ? date.getMinutes().toString() : "0" + date.getMinutes();
 
     useEffect(() => {
-        if (props.message.isEncrypted && props.reqUser) {
-            const myUserId = props.reqUser.id.toString();
-            const myEncryptedKey = props.message.encryptedAesKeys?.[myUserId];
+        const localPlaintext = (props.message as MessageDTO & { __localPlaintext?: string }).__localPlaintext;
+        if (isOwnMessage) {
+            if (localPlaintext) {
+                setDecryptedContent(localPlaintext);
+                setDecryptError(false);
+                return;
+            }
 
-            if (!myEncryptedKey || !props.message.iv) {
+            let cancelled = false;
+            const loadCachedOwnMessage = async () => {
+                try {
+                    const cached = await SessionRatchetService.getCachedOwnMessage(props.message.id.toString());
+                    if (!cancelled) {
+                        if (cached) {
+                            setDecryptedContent(cached);
+                            setDecryptError(false);
+                        } else {
+                            setDecryptError(true);
+                        }
+                    }
+                } catch (error) {
+                    if (!cancelled) {
+                        setDecryptError(true);
+                        console.error('[MessageCard] failed to load own cached message', error);
+                    }
+                }
+            };
+            void loadCachedOwnMessage();
+            return () => {
+                cancelled = true;
+            };
+        }
+
+        if (props.message.isEncrypted && props.reqUser) {
+            const senderUserId = props.message.user.id.toString();
+            const myUserId = props.reqUser.id.toString();
+            if (!props.message.ratchetHeader) {
                 setDecryptError(true);
                 TelemetryService.logDecryptFailure({
                     userId: myUserId,
                     chatId: "",
                     messageId: props.message.id.toString(),
-                    failureReason: !props.message.iv ? "missing-iv" : "missing-encrypted-key",
+                    failureReason: "missing-ratchet-header",
                     timestamp: new Date().toISOString(),
                 }, null);
                 return;
             }
 
-            const doDecrypt = async () => {
-                let privateKey: CryptoKey;
+            const doRatchetDecrypt = async () => {
+                let headerKind = 'unknown';
                 try {
-                    privateKey = KeyManagementService.getCachedPrivateKey();
-                } catch {
-                    setDecryptError(true);
-                    TelemetryService.logDecryptFailure({
-                        userId: myUserId,
-                        chatId: "",
-                        messageId: props.message.id.toString(),
-                        failureReason: "private-key-not-loaded",
-                        timestamp: new Date().toISOString(),
-                    }, null);
-                    return;
-                }
+                    const parsed = JSON.parse(props.message.ratchetHeader!);
+                    headerKind = (parsed && typeof parsed === 'object' && !Array.isArray(parsed) && !('body' in parsed))
+                        ? `map[${Object.keys(parsed).join(',')}]` : 'single';
+                } catch { headerKind = 'unparseable'; }
+                console.log('[MessageCard] decrypting encrypted message', {
+                    messageId: props.message.id.toString(),
+                    senderUserId,
+                    myUserId,
+                    isOwn: isOwnMessage,
+                    contentLen: (props.message.content || '').length,
+                    headerKind,
+                    headerSlice: props.message.ratchetHeader!.slice(0, 120),
+                });
                 try {
-                    const plaintext = await CryptoService.hybridDecrypt(
-                        props.message.content,
-                        props.message.iv!,
-                        myEncryptedKey,
-                        privateKey
+                    const plaintext = await SessionRatchetService.ratchetDecrypt(
+                        props.message.ratchetHeader!,
+                        props.message.content || '',
+                        senderUserId,
+                        props.message.id.toString()
                     );
+                    console.log('[MessageCard] decrypt SUCCESS', {
+                        messageId: props.message.id.toString(),
+                        isOwn: isOwnMessage,
+                        plaintextLen: plaintext.length,
+                    });
                     setDecryptedContent(plaintext);
-                } catch {
+                } catch (e) {
+                    console.error('[MessageCard] decrypt FAILED', {
+                        messageId: props.message.id.toString(),
+                        isOwn: isOwnMessage,
+                        senderUserId,
+                        headerKind,
+                        error: (e as Error).message,
+                    });
                     setDecryptError(true);
                     TelemetryService.logDecryptFailure({
                         userId: myUserId,
                         chatId: "",
                         messageId: props.message.id.toString(),
-                        failureReason: "decrypt-threw",
+                        failureReason: "ratchet-decrypt-threw",
                         timestamp: new Date().toISOString(),
                     }, null);
                 }
             };
-            doDecrypt();
+            void doRatchetDecrypt();
+            return;
         }
-    }, [props.message, props.reqUser]);
 
-    const displayContent = props.message.isEncrypted
-        ? decryptedContent ?? (decryptError ? "🔒 Cannot decrypt" : "🔒 Decrypting...")
-        : props.message.content;
+        setDecryptedContent(null);
+        setDecryptError(false);
+    }, [props.message, props.reqUser, isOwnMessage]);
+
+    const displayContent = isOwnMessage
+        ? decryptedContent ?? (decryptError ? "🔒 Cannot decrypt" : "🔒 Loading...")
+        : props.message.isEncrypted
+            ? decryptedContent ?? (decryptError ? "🔒 Cannot decrypt" : "🔒 Decrypting...")
+            : props.message.content ?? "";
 
     const label: React.ReactElement = (
         <div className={styles.bubbleContainer}>

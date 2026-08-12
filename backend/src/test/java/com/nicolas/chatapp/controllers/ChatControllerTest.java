@@ -4,6 +4,7 @@ import com.nicolas.chatapp.AbstractIntegrationTest;
 import com.nicolas.chatapp.config.JwtConstants;
 import com.nicolas.chatapp.dto.request.GroupChatRequestDTO;
 import com.nicolas.chatapp.dto.request.LoginRequestDTO;
+import org.springframework.mock.web.MockHttpServletResponse;
 import com.nicolas.chatapp.dto.response.ChatDTO;
 import com.nicolas.chatapp.dto.response.LoginResponseDTO;
 import com.nicolas.chatapp.dto.response.MessageDTO;
@@ -64,7 +65,7 @@ class ChatControllerTest extends AbstractIntegrationTest {
         // Create new chat
         String mail = "leia.organa@test.com";
         LoginRequestDTO request = new LoginRequestDTO(mail, "4567");
-        LoginResponseDTO response = authController.login(request).getBody();
+        LoginResponseDTO response = authController.login(request, new MockHttpServletResponse()).getBody();
         assert response != null;
         String authorization = JwtConstants.TOKEN_PREFIX + response.token();
         User leia = userService.findUserById(leiasId);
@@ -92,7 +93,7 @@ class ChatControllerTest extends AbstractIntegrationTest {
         // Create new chat
         String mail = "leia.organa@test.com";
         LoginRequestDTO request = new LoginRequestDTO(mail, "4567");
-        LoginResponseDTO response = authController.login(request).getBody();
+        LoginResponseDTO response = authController.login(request, new MockHttpServletResponse()).getBody();
         assert response != null;
         String authorization = JwtConstants.TOKEN_PREFIX + response.token();
         User leia = userService.findUserById(leiasId);
@@ -140,7 +141,7 @@ class ChatControllerTest extends AbstractIntegrationTest {
         // Get user
         String mail = "luke.skywalker@test.com";
         LoginRequestDTO request = new LoginRequestDTO(mail, "1234");
-        LoginResponseDTO response = authController.login(request).getBody();
+        LoginResponseDTO response = authController.login(request, new MockHttpServletResponse()).getBody();
         assert response != null;
         String authorization = JwtConstants.TOKEN_PREFIX + response.token();
         ResponseEntity<List<ChatDTO>> result = chatController.findAllChatsByUserId(authorization);
@@ -159,7 +160,7 @@ class ChatControllerTest extends AbstractIntegrationTest {
         // Add user to group
         String mail = "luke.skywalker@test.com";
         LoginRequestDTO request = new LoginRequestDTO(mail, "1234");
-        LoginResponseDTO response = authController.login(request).getBody();
+        LoginResponseDTO response = authController.login(request, new MockHttpServletResponse()).getBody();
         assert response != null;
         String authorization = JwtConstants.TOKEN_PREFIX + response.token();
         User vader = userService.findUserById(vadersId);
@@ -177,7 +178,7 @@ class ChatControllerTest extends AbstractIntegrationTest {
         // Add as user that is not admin
         mail = "leia.organa@test.com";
         request = new LoginRequestDTO(mail, "4567");
-        response = authController.login(request).getBody();
+        response = authController.login(request, new MockHttpServletResponse()).getBody();
         assert response != null;
         authorization = JwtConstants.TOKEN_PREFIX + response.token();
         String finalAuthorization1 = authorization;
@@ -190,7 +191,7 @@ class ChatControllerTest extends AbstractIntegrationTest {
         // Remove from Chat
         String mail = "luke.skywalker@test.com";
         LoginRequestDTO request = new LoginRequestDTO(mail, "1234");
-        LoginResponseDTO response = authController.login(request).getBody();
+        LoginResponseDTO response = authController.login(request, new MockHttpServletResponse()).getBody();
         assert response != null;
         String authorization = JwtConstants.TOKEN_PREFIX + response.token();
         User leia = userService.findUserById(leiasId);
@@ -209,7 +210,7 @@ class ChatControllerTest extends AbstractIntegrationTest {
         // Remove self from chat as not admin
         mail = "obiwan.kenobi@test.com";
         request = new LoginRequestDTO(mail, "3456");
-        response = authController.login(request).getBody();
+        response = authController.login(request, new MockHttpServletResponse()).getBody();
         assert response != null;
         authorization = JwtConstants.TOKEN_PREFIX + response.token();
         User kenobi = userService.findUserById(kenobisId);
@@ -220,7 +221,7 @@ class ChatControllerTest extends AbstractIntegrationTest {
         // Remove as not admin
         mail = "han.solo@test.com";
         request = new LoginRequestDTO(mail, "5678");
-        response = authController.login(request).getBody();
+        response = authController.login(request, new MockHttpServletResponse()).getBody();
         assert response != null;
         authorization = JwtConstants.TOKEN_PREFIX + response.token();
         String finalAuthorization = authorization;
@@ -230,10 +231,10 @@ class ChatControllerTest extends AbstractIntegrationTest {
     @Test
     void markAsRead() throws UserException, ChatException {
 
-        // Mark chat as read
+// Mark chat as read
         String mail = "luke.skywalker@test.com";
         LoginRequestDTO request = new LoginRequestDTO(mail, "1234");
-        LoginResponseDTO response = authController.login(request).getBody();
+        LoginResponseDTO response = authController.login(request, new MockHttpServletResponse()).getBody();
         assert response != null;
         String authorization = JwtConstants.TOKEN_PREFIX + response.token();
         User luke = userService.findUserById(lukesId);
@@ -248,7 +249,7 @@ class ChatControllerTest extends AbstractIntegrationTest {
         // Mark chat as read that user is not a part of
         mail = "darth.vader@test.com";
         request = new LoginRequestDTO(mail, "2345");
-        response = authController.login(request).getBody();
+response = authController.login(request, new MockHttpServletResponse()).getBody();
         assert response != null;
         authorization = JwtConstants.TOKEN_PREFIX + response.token();
         String finalAuthorization1 = authorization;
@@ -261,7 +262,7 @@ class ChatControllerTest extends AbstractIntegrationTest {
         // Remove non-existing chat
         String mail = "imperator.palpatine@test.com";
         LoginRequestDTO request = new LoginRequestDTO(mail, "6789");
-        LoginResponseDTO response = authController.login(request).getBody();
+        LoginResponseDTO response = authController.login(request, new MockHttpServletResponse()).getBody();
         assert response != null;
         String authorization = JwtConstants.TOKEN_PREFIX + response.token();
         String finalAuthorization = authorization;
@@ -271,10 +272,10 @@ class ChatControllerTest extends AbstractIntegrationTest {
         chatController.deleteChat(theDarkSideChatId, authorization);
         assertThrows(ChatException.class, () -> chatController.findChatById(theDarkSideChatId));
 
-        // Remove group chat as not admin
+// Remove group chat as not admin
         mail = "leia.organa@test.com";
         request = new LoginRequestDTO(mail, "4567");
-        response = authController.login(request).getBody();
+        response = authController.login(request, new MockHttpServletResponse()).getBody();
         assert response != null;
         authorization = JwtConstants.TOKEN_PREFIX + response.token();
         String finalAuthorization1 = authorization;
@@ -283,7 +284,7 @@ class ChatControllerTest extends AbstractIntegrationTest {
         // Remove single chat
         mail = "obiwan.kenobi@test.com";
         request = new LoginRequestDTO(mail, "3456");
-        response = authController.login(request).getBody();
+        response = authController.login(request, new MockHttpServletResponse()).getBody();
         assert response != null;
         authorization = JwtConstants.TOKEN_PREFIX + response.token();
         chatController.deleteChat(leiaAndKenobisChatId, authorization);

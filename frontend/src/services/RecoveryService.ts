@@ -2,7 +2,7 @@
  * BIP39 Recovery Service
  *
  * On signup, generates a 12-word BIP39 mnemonic phrase.
- * Derives a symmetric AES key from the mnemonic, uses it to encrypt the RSA private key,
+ * Derives a symmetric AES key from the mnemonic, uses it to encrypt the Curve25519 private key,
  * and stores the encrypted blob on the backend.
  *
  * Recovery flow: user enters phrase → derive key → decrypt blob → re-wrap with new password.
@@ -303,22 +303,33 @@ class RecoveryService {
         );
     }
 
-    /**
-     * Encrypt the private key (as base64 PKCS8 string) with the mnemonic-derived key.
-     * Returns the bundle ready for backend storage.
+/**
+     * Encrypt the private key bundle (JSON containing the base64 Curve25519 private key
+     * AND the public key) with the mnemonic-derived key. Returns the bundle ready for
+     * backend storage.
+     *
+     * Storing the public key alongside the private key is critical: the recovery flow
+     * must persist BOTH keys to IndexedDB so the ratchet identity can be rebuilt on a
+     * new device. Without the public key, SessionRatchetService cannot initialize and
+     * old messages cannot be decrypted.
      */
     async encryptPrivateKeyWithMnemonic(
         privateKeyBase64: string,
+        publicKeyBase64: string,
         mnemonic: string
     ): Promise<RecoveryBlobDTO> {
+        const bundle = JSON.stringify({
+            curve25519PrivateKey: privateKeyBase64,
+            curve25519PublicKey: publicKeyBase64,
+        });
         const salt = crypto.getRandomValues(new Uint8Array(16));
         const iv = crypto.getRandomValues(new Uint8Array(12));
         const derivedKey = await this.deriveKeyFromMnemonic(mnemonic, salt);
 
-        const encryptedBuf = await crypto.subtle.encrypt(
+const encryptedBuf = await crypto.subtle.encrypt(
             { name: "AES-GCM", iv },
             derivedKey,
-            new TextEncoder().encode(privateKeyBase64)
+            new TextEncoder().encode(bundle)
         );
 
         const bufToBase64 = (buf: ArrayBuffer): string => {
@@ -335,9 +346,9 @@ class RecoveryService {
         };
     }
 
-    /**
-     * Decrypt the private key from a recovery blob using the mnemonic.
-     * Returns the base64 PKCS8 private key string.
+/**
+     * Decrypt the private key bundle from a recovery blob using the mnemonic.
+     * Returns the JSON string containing the base64 Curve25519 private key.
      */
     async decryptPrivateKeyWithMnemonic(
         blob: RecoveryBlobDTO,
@@ -412,7 +423,7 @@ class RecoveryService {
         localStorage.setItem(this.STORAGE_KEY, "true");
     }
 
-    /**
+/**
      * Full recovery flow: enter mnemonic → fetch blob → decrypt private key → re-wrap with new password.
      */
     async recoverAccess(
@@ -420,30 +431,48 @@ class RecoveryService {
         newPassword: string,
         userId: string,
         token: string
-    ): Promise<string> {
+    ): Promise<void> {
         // 1. Fetch recovery blob from backend
         const blob = await this.fetchRecoveryBlob(token);
         if (!blob) {
             throw new Error("No recovery blob found for this account. Was a recovery phrase generated on signup?");
         }
 
-        // 2. Decrypt private key with mnemonic
-        const privateKeyBase64 = await this.decryptPrivateKeyWithMnemonic(blob, mnemonic);
+// 2. Decrypt the key bundle with mnemonic. The blob stores a JSON bundle
+        //    containing BOTH the Curve25519 private key and the public key.
+        const decryptedBundle = await this.decryptPrivateKeyWithMnemonic(blob, mnemonic);
 
-        // 3. Re-wrap private key with new password (replaces local IndexedDB record)
-        // Borrow the encryptPrivateKey logic from CryptoService
+        let privateKeyBase64: string;
+        let curve25519PublicKey: string;
+
+        try {
+            const parsed = JSON.parse(decryptedBundle);
+            privateKeyBase64 = parsed.curve25519PrivateKey;
+            curve25519PublicKey = parsed.curve25519PublicKey;
+} catch {
+            // Legacy blob that stores only the raw private key string.
+            // Re-derive the public key from the private key via Curve.async.createKeyPair.
+privateKeyBase64 = decryptedBundle;
+            // The default export of the libsignal package is an async factory that
+            // resolves to the initialized { Curve } instance, which exposes `.async`.
+            const libsignal = await import('@privacyresearch/libsignal-protocol-typescript');
+            const { Curve } = await (libsignal.default as () => Promise<{ Curve: any }>)();
+            const idKeyPair = await Curve.async.createKeyPair(base64ToArrayBuffer(privateKeyBase64));
+            curve25519PublicKey = arrayBufferToBase64(idKeyPair.pubKey);
+        }
+
+        if (!privateKeyBase64) {
+            throw new Error("Recovery blob did not contain a valid private key.");
+        }
+
+        // 3. Re-wrap the private key with the new password (replaces local IndexedDB record).
+        //    The bundle stores the Curve25519 private key (same format as signup).
         const cryptoService = (await import("./CryptoService")).default;
         const encrypted = await cryptoService.encryptPrivateKey(privateKeyBase64, newPassword);
 
-        // 4. Save re-wrapped key locally
+        // 4. Persist the key record locally, INCLUDING the public key so that
+        //    loadOnSignIn() can initialize the ratchet identity and decrypt old messages.
         const KeyStorageService = (await import("./KeyStorageService")).default;
-        // We need the public key too — fetch it from the backend
-        const res = await fetch(`${BASE_API_URL}/api/users/${userId}/public-key`, {
-            headers: {
-                Authorization: `${AUTHORIZATION_PREFIX}${token}`,
-            },
-        });
-        const publicKey = res.status === 200 ? await res.text() : "";
 
         await KeyStorageService.saveKeyRecord({
             userId,
@@ -451,15 +480,31 @@ class RecoveryService {
             encryptedData: encrypted.encryptedData,
             iv: encrypted.iv,
             salt: encrypted.salt,
-            publicKey,
+            publicKey: curve25519PublicKey,
+            curve25519PublicKey,
+            curve25519PrivateKey: undefined,
             createdAt: new Date().toISOString(),
-        });
+        } as any);
 
-        // 5. Load private key into cache
+        // 5. Load the private key into the cache and re-initialize the ratchet.
         await KeyManagementService.loadOnSignIn(userId, newPassword);
-
-        return privateKeyBase64;
     }
+}
+
+/** Utility: convert a base64 string to an ArrayBuffer. */
+function base64ToArrayBuffer(base64: string): ArrayBuffer {
+    const binary = atob(base64);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+    return bytes.buffer;
+}
+
+/** Utility: convert an ArrayBuffer to a base64 string. */
+function arrayBufferToBase64(buf: ArrayBuffer): string {
+    const bytes = new Uint8Array(buf);
+    let binary = "";
+    for (let i = 0; i < bytes.byteLength; i++) binary += String.fromCharCode(bytes[i]);
+    return btoa(binary);
 }
 
 const recoveryService = new RecoveryService();

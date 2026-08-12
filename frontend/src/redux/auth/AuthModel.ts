@@ -4,6 +4,7 @@ export interface SignUpRequestDTO {
     email: string,
     password: string,
     fullName: string,
+    captchaToken: string,
 }
 
 export interface UpdateUserRequestDTO {
@@ -27,7 +28,6 @@ export interface UserDTO {
     id: UUID,
     email: string,
     fullName: string,
-    publicKey?: string | null,
 }
 
 export interface AuthenticationErrorDTO {
@@ -40,22 +40,23 @@ export interface ApiResponseDTO {
     status: boolean,
 }
 
-export interface PublicKeyDTO {
-    publicKey: string;
-}
-
 export interface PasswordChangeRequestDTO {
     oldPassword: string;
     newPassword: string;
 }
 
+export interface VerifyOtpRequestDTO {
+    email: string,
+    otpCode: string,
+}
+
 export type AuthReducerState = {
     signin: LoginResponseDTO | null,
-    signup: LoginResponseDTO | null,
+    signup: ApiResponseDTO | null,
     reqUser: UserDTO | null,
     searchUser: UserDTO[] | null,
-    updateUser: ApiResponseDTO | null,
-    uploadedPublicKey: ApiResponseDTO | null,
-    fetchedPublicKey: string | null,
+updateUser: ApiResponseDTO | null,
     passwordChanged: ApiResponseDTO | null,
+    pendingEmail: string | null,
+    otpVerification: LoginResponseDTO | null,
 }

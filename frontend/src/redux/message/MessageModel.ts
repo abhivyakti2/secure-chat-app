@@ -4,13 +4,16 @@ import {ChatDTO} from "../chat/ChatModel";
 
 export interface MessageDTO {
     id: UUID;
-    content: string;
+    content?: string | null;
     timeStamp: string;
     user: UserDTO;
     readBy: UUID[];
     iv?: string | null;
-    encryptedAesKeys?: Record<string, string> | null;
     isEncrypted?: boolean;
+    /** JSON-encoded ratchet header for Double Ratchet messages */
+    ratchetHeader?: string | null;
+    /** "ratchet" = Double Ratchet */
+    encryptionFormat?: string | null;
 }
 
 export interface WebSocketMessageDTO {
@@ -20,15 +23,17 @@ export interface WebSocketMessageDTO {
     user: UserDTO;
     chat: ChatDTO;
     iv?: string | null;
-    encryptedAesKeys?: Record<string, string> | null;
     isEncrypted?: boolean;
+    ratchetHeader?: string | null;
+    encryptionFormat?: string | null;
 }
 
 export interface SendMessageRequestDTO {
     chatId: UUID;
-    content: string;
+    content?: string | null;
     iv?: string | null;
-    encryptedAesKeys?: Record<string, string> | null;
+    ratchetHeader?: string | null;
+    encryptionFormat?: string | null;
 }
 
 export type MessageReducerState = {

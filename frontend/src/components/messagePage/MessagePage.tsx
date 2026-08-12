@@ -201,7 +201,7 @@ const MessagePage = (props: MessagePageProps) => {
             {/*Message Page Content*/}
             <div className={styles.messageContentContainer} onClick={onCloseEmojiPicker}>
                 {messageQuery.length > 0 &&
-                    props.messages.filter(x => x.content.toLowerCase().includes(messageQuery))
+                    props.messages.filter(x => (x.content ?? '').toLowerCase().includes(messageQuery))
                         .map(message => getMessageCard(message))}
                 {messageQuery.length === 0 &&
                     props.messages.map(message => getMessageCard(message))}
