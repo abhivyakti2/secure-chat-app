@@ -96,7 +96,8 @@ class InMemorySignalStore implements StorageType {
     // Optional callback to persist a pinned identity to IndexedDB (set by the service).
     // Receives (identifier, base64 identity key).
     private _onIdentityPinned: ((identifier: string, identityKey: string) => Promise<void>) | null = null;
-    
+    private _dirtyPreKeyIds: Set<number> = new Set();
+    private _removedPreKeyIds: Set<number> = new Set();
     /**
      * Set the persistence callback for pinned identities.
      */
@@ -174,11 +175,14 @@ async saveIdentity(_identifier: string, identityKey: ArrayBuffer, _nonblockingAp
     async storePreKey(keyId: number | string, keyPair: KeyPairType): Promise<void> {
         const kid = typeof keyId === 'string' ? parseInt(keyId, 10) : keyId;
         this._preKeys.set(kid, keyPair);
+        this._dirtyPreKeyIds.add(kid);
     }
 
     async removePreKey(keyId: number | string): Promise<void> {
         const kid = typeof keyId === 'string' ? parseInt(keyId, 10) : keyId;
         this._preKeys.delete(kid);
+        this._dirtyPreKeyIds.delete(kid);
+        this._removedPreKeyIds.add(kid);
     }
 
     // ── SignedPreKeyStore ──
@@ -262,7 +266,7 @@ getPreKeyCount(): number {
         return this._signedPreKey;
     }
 
-    setSignedPreKeyRecord(key: { pubKey: ArrayBuffer; privKey: ArrayBuffer; signature: ArrayBuffer }): void {
+    setSignedPreKeyRecord(key: { pubKey: ArrayBuffer; privKey: ArrayBuffer; signature: ArrayBuffer }| undefined): void {
         this._signedPreKey = key;
     }
 
@@ -272,6 +276,19 @@ getPreKeyCount(): number {
 
     getRegistrationId(): number {
         return this._registrationId;
+    }
+
+    getDirtyPreKeyIds(): number[] {
+        return Array.from(this._dirtyPreKeyIds);
+    }
+
+    getRemovedPreKeyIds(): number[] {
+        return Array.from(this._removedPreKeyIds);
+    }
+
+    clearDirtyTracking(): void {
+        this._dirtyPreKeyIds.clear();
+        this._removedPreKeyIds.clear();
     }
 }
 
@@ -828,7 +845,7 @@ const identityPubKey = await this.store.getIdentityKeyPair();
             
             console.log(`[RATCHET] ratchetDecrypt START sender=${theirUserId} isSelf=${theirUserId === this.currentUserId} myUserId=${this.currentUserId} sessionExists=${!!sessionExists} headerIsMap=${isPerRecipientMap(parsed)} headerType=${header?.type} headerBodyLen=${header?.body?.length ?? 0} bodyMatchesContent=${bodyMatchesContent} contentLen=${(ciphertext || '').length} registrationId=${header?.registrationId ?? 'unknown'} knownSenderIdentity=${knownIdentity ? await hashForLog(knownIdentity) : 'none'}`);
             Logger.cryptoEvent('ratchetDecrypt.start', {
-                myUserId: this.currentUserId,
+                myUserId: this.currentUserId ?? 'unknown',
                 senderId: theirUserId,
                 isSelf: String(theirUserId === this.currentUserId),
                 sessionExists: String(!!sessionExists),
@@ -1412,54 +1429,67 @@ private async _loadRatchetKeysFromStorage(): Promise<void> {
      * Private key material is encrypted at rest using the store encryption key.
      */
 private async _flushRatchetKeysToStorage(): Promise<void> {
-        if (!this.currentUserId) return;
-        const userId = this.currentUserId;
-        try {
-            // One-time pre-keys (scoped by userId)
-            const preKeyMap = this.store.getPreKeysMap();
-            for (const [id, kp] of Array.from(preKeyMap)) {
-                try {
-                    const encryptedPriv = await this._encryptKeyMaterial(arrayBufferToBase64(kp.privKey));
-                    await KeyStorageService.savePreKey({
-                        userId,
-                        id,
-                        pubKey: arrayBufferToBase64(kp.pubKey),
-                        privKey: encryptedPriv,
-                        createdAt: new Date().toISOString(),
-                    });
-                } catch (error) {
-                    Logger.warn('Failed to persist pre-key:', id, error);
-                }
-            }
+    if (!this.currentUserId) return;
+    const userId = this.currentUserId;
+    try {
+        const dirtyIds = this.store.getDirtyPreKeyIds();
+        const removedIds = this.store.getRemovedPreKeyIds();
+        const preKeyMap = this.store.getPreKeysMap();
 
-            // Signed pre-key (scoped by userId)
-            const signed = this.store.getSignedPreKeyRecord();
-            if (signed) {
-                try {
-                    const encryptedPriv = await this._encryptKeyMaterial(arrayBufferToBase64(signed.privKey));
-                    await KeyStorageService.saveSignedPreKey({
-                        userId,
-                        id: 1,
-                        pubKey: arrayBufferToBase64(signed.pubKey),
-                        privKey: encryptedPriv,
-                        signature: arrayBufferToBase64(signed.signature),
-                        createdAt: new Date().toISOString(),
-                    });
-                } catch (error) {
-                    Logger.warn('Failed to persist signed pre-key:', error);
-                }
+        for (const id of dirtyIds) {
+            const kp = preKeyMap.get(id);
+            if (!kp) continue;
+            try {
+                const encryptedPriv = await this._encryptKeyMaterial(arrayBufferToBase64(kp.privKey));
+                await KeyStorageService.savePreKey({
+                    userId,
+                    id,
+                    pubKey: arrayBufferToBase64(kp.pubKey),
+                    privKey: encryptedPriv,
+                    createdAt: new Date().toISOString(),
+                });
+            } catch (error) {
+                Logger.warn('Failed to persist pre-key:', id, error);
             }
-
-            // Registration ID (scoped by userId)
-            await KeyStorageService.saveRegistrationId({
-                userId,
-                registrationId: this.store.getRegistrationId(),
-                createdAt: new Date().toISOString(),
-            });
-        } catch (error) {
-            Logger.error('SessionRatchetService._flushRatchetKeysToStorage failed', error);
         }
+
+        for (const id of removedIds) {
+            try {
+                await KeyStorageService.deletePreKey(userId, id);
+            } catch (error) {
+                Logger.warn('Failed to delete consumed pre-key:', id, error);
+            }
+        }
+
+        this.store.clearDirtyTracking();
+
+        // Signed pre-key + registration ID are single records — cheap, keep as-is
+        const signed = this.store.getSignedPreKeyRecord();
+        if (signed) {
+            try {
+                const encryptedPriv = await this._encryptKeyMaterial(arrayBufferToBase64(signed.privKey));
+                await KeyStorageService.saveSignedPreKey({
+                    userId,
+                    id: 1,
+                    pubKey: arrayBufferToBase64(signed.pubKey),
+                    privKey: encryptedPriv,
+                    signature: arrayBufferToBase64(signed.signature),
+                    createdAt: new Date().toISOString(),
+                });
+            } catch (error) {
+                Logger.warn('Failed to persist signed pre-key:', error);
+            }
+        }
+
+        await KeyStorageService.saveRegistrationId({
+            userId,
+            registrationId: this.store.getRegistrationId(),
+            createdAt: new Date().toISOString(),
+        });
+    } catch (error) {
+        Logger.error('SessionRatchetService._flushRatchetKeysToStorage failed', error);
     }
+}
 
     /**
      * Encrypt arbitrary key material (as base64 string) for storage at rest.

@@ -96,18 +96,16 @@ const [missingKeysBanner, setMissingKeysBanner] = useState<boolean>(false);
     }, [messageState.messages]);
 
 useEffect(() => {
-        if (messageState.newMessage && stompClient && currentChat && isConnected) {
-            // The stored message (sender's own ciphertext) is sent alongside the
-            // per-recipient ciphertext map so the server can deliver each member
-            // their own encrypted copy.
-            const webSocketPayload = {
-                message: {...messageState.newMessage, chat: currentChat},
-                perRecipientContent: pendingPerRecipientContent.current,
-            };
-            stompClient.send("/app/messages", {}, JSON.stringify(webSocketPayload));
-            pendingPerRecipientContent.current = null;
-        }
-    }, [messageState.newMessage]);
+    if (messageState.newMessage && stompClient && currentChat && isConnected) {
+        const { __localPlaintext, ...wireMessage } = messageState.newMessage as any;
+        const webSocketPayload = {
+            message: {...wireMessage, chat: currentChat},
+            perRecipientContent: pendingPerRecipientContent.current,
+        };
+        stompClient.send("/app/messages", {}, JSON.stringify(webSocketPayload));
+        pendingPerRecipientContent.current = null;
+    }
+}, [messageState.newMessage]);
 
     useEffect(() => {
         console.log("Attempting to subscribe to ws: ", subscribeTry);

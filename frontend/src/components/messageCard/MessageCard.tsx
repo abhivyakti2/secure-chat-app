@@ -20,6 +20,7 @@ const MessageCard = (props: MessageCardProps) => {
     const [decryptError, setDecryptError] = useState<boolean>(false);
 
     const isOwnMessage = props.message.user.id === props.reqUser?.id;
+    const isRatchetMessage = props.message.encryptionFormat === 'ratchet' || !!props.message.ratchetHeader;
     const date: Date = new Date(props.message.timeStamp);
     const hours = date.getHours() > 9 ? date.getHours().toString() : "0" + date.getHours();
     const minutes = date.getMinutes() > 9 ? date.getMinutes().toString() : "0" + date.getMinutes();
@@ -58,7 +59,7 @@ const MessageCard = (props: MessageCardProps) => {
             };
         }
 
-        if (props.message.isEncrypted && props.reqUser) {
+        if (isRatchetMessage && props.reqUser) {
             const senderUserId = props.message.user.id.toString();
             const myUserId = props.reqUser.id.toString();
             if (!props.message.ratchetHeader) {
@@ -126,11 +127,11 @@ const MessageCard = (props: MessageCardProps) => {
 
         setDecryptedContent(null);
         setDecryptError(false);
-    }, [props.message, props.reqUser, isOwnMessage]);
+    }, [props.message, props.reqUser, isOwnMessage, isRatchetMessage]);
 
     const displayContent = isOwnMessage
         ? decryptedContent ?? (decryptError ? "🔒 Cannot decrypt" : "🔒 Loading...")
-        : props.message.isEncrypted
+        : isRatchetMessage
             ? decryptedContent ?? (decryptError ? "🔒 Cannot decrypt" : "🔒 Decrypting...")
             : props.message.content ?? "";
 

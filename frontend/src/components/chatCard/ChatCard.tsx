@@ -15,7 +15,7 @@ interface ChatCardProps {
 const ChatCard = (props: ChatCardProps) => {
 
     const authState = useSelector((state: RootState) => state.auth);
-    const [decryptedPreview, setDecryptedPreview] = useState<string | null>(null);
+    const [decryptedPreview, setDecryptedPreview] = useState<string | null>("...");
 
     const name: string = getChatName(props.chat, authState.reqUser);
     const initials: string = getInitialsFromName(name);
@@ -85,7 +85,7 @@ const ChatCard = (props: ChatCardProps) => {
         return () => { cancelled = true; };
     }, [lastMessage, authState.reqUser]);
 
-    const previewText = decryptedPreview ?? lastMessage?.content ?? "";
+    const previewText = decryptedPreview ?? "";
     const lastMessageContent: string = previewText.length > 25 ? previewText.slice(0, 25) + "..." : previewText;
     const lastMessageName: string = lastMessage ? lastMessage.user.fullName === authState.reqUser?.fullName ? "You" : lastMessage.user.fullName : "";
     const lastMessageString: string = lastMessage ? lastMessageName + ": " + lastMessageContent : "";
