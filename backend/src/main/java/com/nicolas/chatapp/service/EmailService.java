@@ -13,6 +13,7 @@ public class EmailService {
 
     public void sendOtpEmail(String toEmail, String otpCode) {
         SimpleMailMessage message = new SimpleMailMessage();
+        message.setFrom("omshantii2024@gmail.com");
         message.setTo(toEmail);
         message.setSubject("Your ChatApp verification code");
         message.setText("Your verification code is: " + otpCode + "\n\nThis code expires in 10 minutes.");
