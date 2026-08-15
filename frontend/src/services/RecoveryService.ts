@@ -249,7 +249,7 @@ class RecoveryService {
 
     // entropy bits (128) + checksum bits (4) = 132 bits
     let bitString = "";
-    for (const byte of entropy) bitString += byte.toString(2).padStart(8, "0");
+    for (let i = 0; i < entropy.length; i++) bitString += entropy[i].toString(2).padStart(8, "0");
     bitString += checksumBits.toString(2).padStart(CS, "0");
 
     // split into 12 groups of 11 bits
