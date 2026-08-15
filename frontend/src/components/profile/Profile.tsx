@@ -142,7 +142,7 @@ const Profile = (props: ProfileProps) => {
             const { record: newRecord } = await KeyManagementService.regenerateKeysWithoutPersist(userId, regenPassword);
 
             // Step 2: Generate new 12-word recovery phrase + encrypted recovery blob
-            const phrase = RecoveryService.generateMnemonic();
+            const phrase = await RecoveryService.generateMnemonic();
 const privateKeyBase64 = await CryptoService.decryptPrivateKey(
                 { encryptedData: newRecord.encryptedData, iv: newRecord.iv, salt: newRecord.salt },
                 regenPassword

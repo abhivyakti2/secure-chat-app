@@ -237,46 +237,31 @@ class RecoveryService {
      * Generate a 12-word BIP39 mnemonic using crypto.getRandomValues.
      * Entropy: 128 bits (12 words * 11 bits/word).
      */
-    generateMnemonic(): string {
-        const entropy = new Uint8Array(16); // 128 bits
-        crypto.getRandomValues(entropy);
+    async generateMnemonic(): Promise<string> {
+    const ENT = 128;
+    const CS = ENT / 32; // 4 checksum bits per BIP39 spec
+    const entropy = new Uint8Array(ENT / 8); // 16 bytes
+    crypto.getRandomValues(entropy);
 
-        // Convert entropy to 12 word indices (11 bits each)
-        const words: string[] = [];
-        // We use the first 132 bits (12 * 11) from the 128-bit entropy + checksum
-        // Simplified: treat entropy as a big-endian number and extract 11-bit chunks
-        let bitsRemaining = 128;
-        let bitIndex = 0;
+    // BIP39 checksum = first CS bits of SHA-256(entropy)
+    const hashBuf = await crypto.subtle.digest("SHA-256", entropy.buffer as ArrayBuffer);
+    const checksumBits = new Uint8Array(hashBuf)[0] >> (8 - CS);
 
-        // Combine bytes into a single number for extraction
-        let value = 0;
-        let bitsInValue = 0;
+    // entropy bits (128) + checksum bits (4) = 132 bits
+    let bitString = "";
+    for (const byte of entropy) bitString += byte.toString(2).padStart(8, "0");
+    bitString += checksumBits.toString(2).padStart(CS, "0");
 
-        for (let i = 0; i < 12; i++) {
-            // Ensure we have enough bits
-            while (bitsInValue < 11 && bitIndex < 128) {
-                const byteIndex = Math.floor(bitIndex / 8);
-                const bitOffset = bitIndex % 8;
-                const byte = entropy[byteIndex];
-                const bit = (byte >> (7 - bitOffset)) & 1;
-                value = (value << 1) | bit;
-                bitsInValue++;
-                bitIndex++;
-            }
-
-            // Extract 11 bits
-            if (bitsInValue >= 11) {
-                const shift = bitsInValue - 11;
-                const wordIndex = (value >> shift) & 0x7FF; // 0x7FF = 2047 (11 bits)
-                words.push(BIP39_WORDS[wordIndex % BIP39_WORDS.length]);
-                // Remove used bits
-                value = value & ((1 << shift) - 1);
-                bitsInValue = shift;
-            }
-        }
-
-        return words.join(" ");
+    // split into 12 groups of 11 bits
+    const words: string[] = [];
+    for (let i = 0; i < 12; i++) {
+        const chunk = bitString.slice(i * 11, i * 11 + 11);
+        const wordIndex = parseInt(chunk, 2);
+        words.push(BIP39_WORDS[wordIndex % BIP39_WORDS.length]);
     }
+
+    return words.join(" ");
+}
 
     /**
      * Derive an AES-GCM key from a mnemonic phrase using PBKDF2.

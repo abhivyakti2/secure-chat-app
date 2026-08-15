@@ -126,14 +126,14 @@ describe("E2EE Cryptographic Lifecycle (Curve25519 / Double Ratchet)", () => {
     });
 
     test("6. Recovery phrase generation produces 12 words", async () => {
-        const phrase = RecoveryService.generateMnemonic();
+        const phrase = await RecoveryService.generateMnemonic();
         expect(phrase).toBeTruthy();
         const words = phrase.split(/\s+/);
         expect(words.length).toBe(12);
     });
 
 test("7. Recovery phrase encryption round-trip", async () => {
-        const phrase = RecoveryService.generateMnemonic();
+        const phrase = await RecoveryService.generateMnemonic();
         const privateKeyData = "base64curve25519privatekeymaterial";
         const publicKeyData = "base64curve25519publickeymaterial";
 
@@ -149,7 +149,7 @@ test("7. Recovery phrase encryption round-trip", async () => {
     });
 
     test("8. Wrong recovery phrase fails to decrypt blob", async () => {
-        const correctPhrase = RecoveryService.generateMnemonic();
+        const correctPhrase = await RecoveryService.generateMnemonic();
         const wrongPhrase = "abandon ability able about above absent absorb abstract absurd abuse access accident";
 
         const blob = await RecoveryService.encryptPrivateKeyWithMnemonic(
@@ -171,7 +171,7 @@ test("7. Recovery phrase encryption round-trip", async () => {
         const pubKey = await KeyManagementService.initializeOnSignup(recoveryUserId, recoveryPassword);
 
         // Generate recovery phrase + blob (as done on signup)
-        const phrase = RecoveryService.generateMnemonic();
+        const phrase = await RecoveryService.generateMnemonic();
         const record = await KeyStorageService.getKeyRecord(recoveryUserId);
         expect(record).toBeTruthy();
 

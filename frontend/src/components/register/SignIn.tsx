@@ -144,7 +144,7 @@ const SignIn = () => {
             const { record: newRecord } = await KeyManagementService.regenerateKeysWithoutPersist(userId, signInData.password);
 
             // Step 2: Generate new recovery phrase + blob
-            const phrase = RecoveryService.generateMnemonic();
+            const phrase = await RecoveryService.generateMnemonic();
             const CryptoService = (await import("../../services/CryptoService")).default;
             const privateKeyBase64 = await CryptoService.decryptPrivateKey(
                 { encryptedData: newRecord.encryptedData, iv: newRecord.iv, salt: newRecord.salt },

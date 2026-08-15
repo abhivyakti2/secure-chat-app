@@ -44,7 +44,7 @@ const password = signupPassword;
 await KeyManagementService.initializeOnSignup(userId, password);
             await KeyManagementService.uploadPreKeyBundle(activeToken);
 
-            const phrase = RecoveryService.generateMnemonic();
+            const phrase = await RecoveryService.generateMnemonic();
             setRecoveryPhrase(phrase);
             setShowPhraseDialog(true);
 
