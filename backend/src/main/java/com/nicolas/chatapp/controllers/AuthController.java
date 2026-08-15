@@ -55,6 +55,7 @@ public class AuthController {
     private final EmailService emailService;
     private final CaptchaService captchaService;
 
+    @Transactional
     @PostMapping("/signup")
     public ResponseEntity<ApiResponseDTO> signup(@RequestBody UpdateUserRequestDTO signupRequestDTO) throws UserException {
 
