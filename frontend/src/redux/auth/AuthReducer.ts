@@ -11,6 +11,8 @@ reqUser: null,
     passwordChanged: null,
     pendingEmail: null,
     otpVerification: null,
+    passwordResetOtpRequest: null,
+    passwordReset: null,
 };
 
 const authReducer = (state: AuthReducerState = initialState, action: Action): AuthReducerState => {
@@ -29,8 +31,12 @@ case actionTypes.UPDATE_USER:
             return {...state, passwordChanged: action.payload};
         case actionTypes.VERIFY_OTP:
             return {...state, otpVerification: action.payload};
+        case actionTypes.REQUEST_PASSWORD_RESET_OTP:
+            return {...state, passwordResetOtpRequest: action.payload};
+        case actionTypes.RESET_PASSWORD_WITH_OTP:
+            return {...state, passwordReset: action.payload};
         case actionTypes.LOGOUT_USER:
-            return {...state, signin: null, signup: null, reqUser: null, passwordChanged: null, pendingEmail: null, otpVerification: null};
+            return {...state, signin: null, signup: null, reqUser: null, passwordChanged: null, pendingEmail: null, otpVerification: null, passwordResetOtpRequest: null, passwordReset: null};
     }
     return state;
 };

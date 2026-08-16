@@ -50,6 +50,17 @@ export interface VerifyOtpRequestDTO {
     otpCode: string,
 }
 
+export interface PasswordResetOtpRequestDTO {
+    email: string,
+    captchaToken: string,
+}
+
+export interface ResetPasswordWithOtpRequestDTO {
+    email: string,
+    otpCode: string,
+    newPassword: string,
+}
+
 export type AuthReducerState = {
     signin: LoginResponseDTO | null,
     signup: ApiResponseDTO | null,
@@ -59,4 +70,6 @@ updateUser: ApiResponseDTO | null,
     passwordChanged: ApiResponseDTO | null,
     pendingEmail: string | null,
     otpVerification: LoginResponseDTO | null,
+    passwordResetOtpRequest: ApiResponseDTO | null,
+    passwordReset: LoginResponseDTO | null,
 }

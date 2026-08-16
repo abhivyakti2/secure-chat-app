@@ -3,6 +3,8 @@ import {
     LoginRequestDTO,
     LoginResponseDTO,
     PasswordChangeRequestDTO,
+    PasswordResetOtpRequestDTO,
+    ResetPasswordWithOtpRequestDTO,
     SignUpRequestDTO,
     UpdateUserRequestDTO,
     UserDTO,
@@ -75,6 +77,45 @@ export const loginUser = (data: LoginRequestDTO) => async (dispatch: AppDispatch
     } catch (error: any) {
         Logger.error('Login failed', error);
     }
+};
+
+export const requestPasswordResetOtp = (data: PasswordResetOtpRequestDTO) => async (dispatch: AppDispatch): Promise<ApiResponseDTO> => {
+    const res: Response = await fetch(`${BASE_API_URL}/${AUTH_PATH}/forgot-password/request-otp`, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(data),
+    });
+
+    const resData: ApiResponseDTO = await res.json();
+    if (!res.ok) {
+        throw new Error((resData as any).message || "Unable to request a reset code.");
+    }
+    Logger.info('Password reset OTP requested', { email: data.email });
+    dispatch({type: actionTypes.REQUEST_PASSWORD_RESET_OTP, payload: resData});
+    return resData;
+};
+
+export const resetPasswordWithOtp = (data: ResetPasswordWithOtpRequestDTO) => async (dispatch: AppDispatch): Promise<LoginResponseDTO> => {
+    const res: Response = await fetch(`${BASE_API_URL}/${AUTH_PATH}/forgot-password/verify-otp`, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(data),
+    });
+
+    const resData: LoginResponseDTO = await res.json();
+    if (!res.ok) {
+        throw new Error((resData as any).message || "Password reset failed.");
+    }
+    if (resData.token) {
+        localStorage.setItem(TOKEN, resData.token);
+    }
+    Logger.info('Password reset OTP verified', { hasToken: !!resData.token, isAuthenticated: resData.isAuthenticated });
+    dispatch({type: actionTypes.RESET_PASSWORD_WITH_OTP, payload: resData});
+    return resData;
 };
 
 export const currentUser = (token: string) => async (dispatch: AppDispatch): Promise<void> => {

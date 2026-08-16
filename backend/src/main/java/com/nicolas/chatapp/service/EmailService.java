@@ -19,5 +19,14 @@ public class EmailService {
         message.setText("Your verification code is: " + otpCode + "\n\nThis code expires in 10 minutes.");
         mailSender.send(message);
     }
+
+    public void sendPasswordResetOtpEmail(String toEmail, String otpCode) {
+        SimpleMailMessage message = new SimpleMailMessage();
+        message.setFrom("omshantii2024@gmail.com");
+        message.setTo(toEmail);
+        message.setSubject("Your ChatApp password reset code");
+        message.setText("Your password reset code is: " + otpCode + "\n\nThis code expires in 10 minutes.");
+        mailSender.send(message);
+    }
 }
 

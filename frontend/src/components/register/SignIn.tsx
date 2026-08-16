@@ -1,7 +1,7 @@
 import {TOKEN} from "../../config/Config";
 import {useDispatch, useSelector} from "react-redux";
 import {AuthReducerState, LoginRequestDTO} from "../../redux/auth/AuthModel";
-import {useNavigate} from "react-router-dom";
+import {useLocation, useNavigate} from "react-router-dom";
 import React, {Dispatch, useCallback, useEffect, useRef, useState} from "react";
 import {currentUser, loginUser} from "../../redux/auth/AuthAction";
 import {RootState} from "../../redux/Store";
@@ -11,6 +11,14 @@ import KeyManagementService from "../../services/KeyManagementService";
 import RecoveryService from "../../services/RecoveryService";
 import KeyStorageService from "../../services/KeyStorageService";
 import TelemetryService from "../../services/TelemetryService";
+
+type SignInRouteState = {
+    forceNewDeviceCheck?: boolean;
+    email?: string;
+    password?: string;
+    token?: string;
+    reason?: string;
+};
 
 // TODO: Show error if something went wrong (like wrong mail/ pw)
 const SignIn = () => {
@@ -26,10 +34,13 @@ const SignIn = () => {
     const [recoveryLoading, setRecoveryLoading] = useState<boolean>(false);
     const [newDeviceLoading, setNewDeviceLoading] = useState<boolean>(false);
     const navigate = useNavigate();
+    const location = useLocation();
+    const routeState = location.state as SignInRouteState | null;
     const dispatch: Dispatch<any> = useDispatch();
     const token: string | null = localStorage.getItem(TOKEN);
     const state: AuthReducerState = useSelector((state: RootState) => state.auth);
     const handledLoginTokenRef = useRef<string | null>(null);
+    const handledForcedCheckRef = useRef<boolean>(false);
 
     useEffect(() => {
         if (token) {
@@ -37,13 +48,22 @@ const SignIn = () => {
         }
     }, [token, state.reqUser, dispatch]);
 
-    const handleLoginSuccess = useCallback(async (userId: string, password: string, jwtToken: string) => {
+    useEffect(() => {
+        if (!routeState?.forceNewDeviceCheck) return;
+        setSignInData(prev => ({
+            email: routeState.email || prev.email,
+            password: routeState.password || prev.password,
+        }));
+    }, [routeState?.forceNewDeviceCheck, routeState?.email, routeState?.password]);
+
+    const handleLoginSuccess = useCallback(async (userId: string, password: string, jwtToken: string, forcedReason?: string) => {
         const loadResult = await KeyManagementService.loadOnSignIn(userId, password);
         if (loadResult.status === "new-device") {
             setNewDeviceReason(
-                loadResult.reason === "no-local-key"
+                forcedReason ||
+                (loadResult.reason === "no-local-key"
                     ? "This device has no encryption keys. Messages sent before this login cannot be decrypted here."
-                    : "The encryption key could not be decrypted with the provided password (wrong password or keys from a different device). Messages sent before this login cannot be decrypted here."
+                    : "The encryption key could not be decrypted with the provided password (wrong password or keys from a different device). Messages sent before this login cannot be decrypted here.")
             );
             setShowNewDeviceDialog(true);
         } else {
@@ -57,6 +77,16 @@ const SignIn = () => {
             navigate("/");
         }
     }, [navigate]);
+
+    useEffect(() => {
+        if (!routeState?.forceNewDeviceCheck || handledForcedCheckRef.current || !state.reqUser) return;
+        const jwtToken = routeState.token || token;
+        const password = routeState.password || signInData.password;
+        if (!jwtToken || !password) return;
+
+        handledForcedCheckRef.current = true;
+        handleLoginSuccess(state.reqUser.id.toString(), password, jwtToken, routeState.reason);
+    }, [routeState?.forceNewDeviceCheck, routeState?.token, routeState?.password, routeState?.reason, state.reqUser, token, signInData.password, handleLoginSuccess]);
 
     useEffect(() => {
         if (state.signin && state.signin.isAuthenticated && state.reqUser) {
@@ -208,7 +238,7 @@ const publicKeyBase64 = newRecord.curve25519PublicKey || newRecord.publicKey || 
 const onChangeEmail = (e: React.ChangeEvent<HTMLInputElement>) => { setSignInData({...signInData, email: e.target.value}); };
     const onChangePassword = (e: React.ChangeEvent<HTMLInputElement>) => { setSignInData({...signInData, password: e.target.value}); };
     const onClickCreateNewAccount = () => { navigate("/signup"); };
-    const onRecoverAccess = () => { navigate("/recover"); };
+    const onForgotPassword = () => { navigate("/forgot-password"); };
 
     return (
         <div>
@@ -238,7 +268,7 @@ const onChangeEmail = (e: React.ChangeEvent<HTMLInputElement>) => { setSignInDat
                         <Button variant="text" size="large" onClick={onClickCreateNewAccount}>Signup</Button>
                     </div>
                     <div style={{textAlign: "center", marginTop: "0.5rem"}}>
-                        <Button variant="text" size="small" onClick={onRecoverAccess} style={{fontSize: "0.8rem"}}>Recover access with recovery phrase</Button>
+                        <Button variant="text" size="small" onClick={onForgotPassword} style={{fontSize: "0.8rem"}}>Forgot password?</Button>
                     </div>
                 </div>
             </div>

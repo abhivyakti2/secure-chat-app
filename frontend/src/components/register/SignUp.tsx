@@ -65,6 +65,7 @@ const SignUp = () => {
 
     const onSubmit = async (e: React.ChangeEvent<HTMLFormElement>) => {
         e.preventDefault();
+        const normalizedEmail = createAccountData.email.trim().toLowerCase();
 
         // @ts-ignore - grecaptcha is loaded globally via the script tag
         let captchaToken = window.grecaptcha?.getResponse(widgetIdRef.current);
@@ -85,12 +86,12 @@ const SignUp = () => {
             return;
         }
 
-        await dispatch(register({...createAccountData, captchaToken}));
+        await dispatch(register({...createAccountData, email: normalizedEmail, captchaToken}));
         // Pass password via route state instead of window.__signupPassword
         // This avoids exposing the plaintext password on the global window object
         navigate("/verify-otp", {
             state: {
-                email: createAccountData.email,
+                email: normalizedEmail,
                 password: createAccountData.password,
             }
         });

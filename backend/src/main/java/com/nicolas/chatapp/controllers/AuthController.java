@@ -4,14 +4,17 @@ import com.nicolas.chatapp.config.JwtConstants;
 import com.nicolas.chatapp.config.TokenProvider;
 import com.nicolas.chatapp.dto.request.LoginRequestDTO;
 import com.nicolas.chatapp.dto.request.PasswordChangeRequestDTO;
+import com.nicolas.chatapp.dto.request.ResetPasswordRequestDTO;
 import com.nicolas.chatapp.dto.request.UpdateUserRequestDTO;
 import com.nicolas.chatapp.dto.request.VerifyOtpRequestDTO;
 import com.nicolas.chatapp.dto.response.ApiResponseDTO;
 import com.nicolas.chatapp.dto.response.LoginResponseDTO;
 import com.nicolas.chatapp.exception.AccountLockedException;
 import com.nicolas.chatapp.exception.UserException;
+import com.nicolas.chatapp.model.PendingPasswordReset;
 import com.nicolas.chatapp.model.PendingSignup;
 import com.nicolas.chatapp.model.User;
+import com.nicolas.chatapp.repository.PendingPasswordResetRepository;
 import com.nicolas.chatapp.repository.PendingSignupRepository;
 import com.nicolas.chatapp.repository.UserRepository;
 import com.nicolas.chatapp.service.CaptchaService;
@@ -19,6 +22,7 @@ import com.nicolas.chatapp.service.EmailService;
 import com.nicolas.chatapp.service.UserService;
 import com.nicolas.chatapp.service.implementation.CustomUserDetailsService;
 import jakarta.servlet.http.Cookie;
+import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -36,8 +40,10 @@ import org.springframework.web.bind.annotation.*;
 import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Random;
+import java.util.concurrent.ConcurrentHashMap;
 
 @Slf4j
 @CrossOrigin
@@ -52,22 +58,32 @@ public class AuthController {
     private final CustomUserDetailsService customUserDetailsService;
     private final UserService userService;
     private final PendingSignupRepository pendingSignupRepository;
+    private final PendingPasswordResetRepository pendingPasswordResetRepository;
     private final EmailService emailService;
     private final CaptchaService captchaService;
+    private final Map<String, LocalDateTime> passwordResetOtpCooldowns = new ConcurrentHashMap<>();
+
+    private static final int MAX_OTP_ATTEMPTS = 5;
+    private static final int OTP_EXPIRY_MINUTES = 10;
+    private static final Duration PASSWORD_RESET_OTP_COOLDOWN = Duration.ofMinutes(1);
 
     @Transactional
     @PostMapping("/signup")
     public ResponseEntity<ApiResponseDTO> signup(@RequestBody UpdateUserRequestDTO signupRequestDTO) throws UserException {
 
-        final String email = signupRequestDTO.email();
+        final String email = normalizeEmail(signupRequestDTO.email());
         final String password = signupRequestDTO.password();
         final String fullName = signupRequestDTO.fullName();
+
+        if (email == null) {
+            throw new UserException("Email is required.");
+        }
 
         if (!captchaService.verifyCaptcha(signupRequestDTO.captchaToken())) {
             throw new UserException("Captcha verification failed. Please try again.");
         }
 
-        Optional<User> existingUser = userRepository.findByEmail(email);
+        Optional<User> existingUser = userRepository.findByEmailIgnoreCase(email);
 
         if (existingUser.isPresent()) {
             throw new UserException("Account with email " + email + " already exists");
@@ -84,7 +100,7 @@ public class AuthController {
                 .password(passwordEncoder.encode(password))
                 .fullName(fullName)
                 .otpCode(otpCode)
-                .expiresAt(LocalDateTime.now().plusMinutes(10))
+                .expiresAt(LocalDateTime.now().plusMinutes(OTP_EXPIRY_MINUTES))
                 .build();
 
         pendingSignupRepository.save(pendingSignup);
@@ -105,8 +121,12 @@ public class AuthController {
     public ResponseEntity<LoginResponseDTO> verifyOtp(@RequestBody VerifyOtpRequestDTO verifyOtpRequestDTO,
                                                       HttpServletResponse response) throws UserException {
 
-final String email = verifyOtpRequestDTO.email();
+final String email = normalizeEmail(verifyOtpRequestDTO.email());
         final String otpCode = verifyOtpRequestDTO.otpCode();
+
+        if (email == null) {
+            throw new UserException("Email is required.");
+        }
 
         log.info("=== OTP verification attempt received for email={} with submitted code='{}' ===", email, otpCode);
 
@@ -127,7 +147,7 @@ final String email = verifyOtpRequestDTO.email();
         }
 
         // OTP brute-force protection: limit to 5 attempts
-        if (pendingSignup.getOtpAttempts() >= 5) {
+        if (pendingSignup.getOtpAttempts() >= MAX_OTP_ATTEMPTS) {
             log.warn("OTP FAIL: too many attempts for email={}. otpAttempts={}", email, pendingSignup.getOtpAttempts());
             pendingSignupRepository.deleteByEmail(email);
             throw new UserException("Too many failed OTP attempts. Please sign up again.");
@@ -136,7 +156,7 @@ final String email = verifyOtpRequestDTO.email();
         if (!pendingSignup.getOtpCode().equals(otpCode)) {
             pendingSignup.setOtpAttempts(pendingSignup.getOtpAttempts() + 1);
             pendingSignupRepository.save(pendingSignup);
-            int remaining = 5 - pendingSignup.getOtpAttempts();
+            int remaining = MAX_OTP_ATTEMPTS - pendingSignup.getOtpAttempts();
             log.warn("OTP MISMATCH for email={}: submitted='{}', stored='{}'. attempts now={}, remaining={}",
                     email, otpCode, pendingSignup.getOtpCode(), pendingSignup.getOtpAttempts(), remaining);
             if (remaining <= 0) {
@@ -161,15 +181,7 @@ final String email = verifyOtpRequestDTO.email();
         SecurityContextHolder.getContext().setAuthentication(authentication);
         String jwt = tokenProvider.generateToken(authentication);
 
-// Set JWT as httpOnly, SameSite cookie for XSS protection.
-        // The Secure flag is enabled in production (HTTPS) and configurable via env.
-        Cookie jwtCookie = new Cookie("token", jwt);
-        jwtCookie.setHttpOnly(true);
-        jwtCookie.setSecure(isSecureCookie());
-        jwtCookie.setPath("/");
-        jwtCookie.setMaxAge(24 * 60 * 60); // 24 hours
-        jwtCookie.setAttribute("SameSite", "Lax");
-        response.addCookie(jwtCookie);
+        addJwtCookie(response, jwt);
 
         LoginResponseDTO loginResponseDTO = LoginResponseDTO.builder()
                 .token(jwt)  // Also return in body for backward compatibility
@@ -181,6 +193,106 @@ final String email = verifyOtpRequestDTO.email();
         return new ResponseEntity<>(loginResponseDTO, HttpStatus.CREATED);
     }
 
+    @Transactional
+    @PostMapping("/forgot-password/request-otp")
+    public ResponseEntity<ApiResponseDTO> requestPasswordResetOtp(@RequestBody Map<String, String> body,
+                                                                  HttpServletRequest request) throws UserException {
+        String email = normalizeEmail(body.get("email"));
+        String clientIp = clientIp(request);
+
+        if (!captchaService.verifyCaptcha(body.get("captchaToken"))) {
+            throw new UserException("Captcha verification failed. Please try again.");
+        }
+
+        if (email != null && !isPasswordResetRateLimited(email, clientIp)) {
+            userRepository.findByEmailIgnoreCase(email).ifPresent(user -> {
+                String otpCode = generateOtpCode();
+                pendingPasswordResetRepository.deleteByEmail(email);
+                PendingPasswordReset pendingReset = PendingPasswordReset.builder()
+                        .email(email)
+                        .otpCode(otpCode)
+                        .expiresAt(LocalDateTime.now().plusMinutes(OTP_EXPIRY_MINUTES))
+                        .build();
+
+                try {
+                    pendingPasswordResetRepository.save(pendingReset);
+                    emailService.sendPasswordResetOtpEmail(email, otpCode);
+                    log.info("Password reset OTP sent to {}", email);
+                } catch (Exception e) {
+                    pendingPasswordResetRepository.deleteByEmail(email);
+                    log.warn("Password reset OTP email failed for {}", email, e);
+                }
+            });
+        }
+
+        ApiResponseDTO response = ApiResponseDTO.builder()
+                .message("If that account exists, an OTP was sent.")
+                .status(true)
+                .build();
+
+        return new ResponseEntity<>(response, HttpStatus.OK);
+    }
+
+    @Transactional
+    @PostMapping("/forgot-password/verify-otp")
+    public ResponseEntity<LoginResponseDTO> resetPasswordWithOtp(@RequestBody ResetPasswordRequestDTO request,
+                                                                 HttpServletResponse response) throws UserException {
+        String email = normalizeEmail(request.email());
+        String otpCode = request.otpCode();
+        String newPassword = request.newPassword();
+
+        if (email == null || otpCode == null || otpCode.isBlank() || newPassword == null || newPassword.length() < 6) {
+            throw new UserException("Invalid password reset request.");
+        }
+
+        PendingPasswordReset pendingReset = pendingPasswordResetRepository.findByEmail(email)
+                .orElseThrow(() -> new UserException("Invalid or expired password reset code."));
+
+        if (pendingReset.getExpiresAt().isBefore(LocalDateTime.now())) {
+            pendingPasswordResetRepository.deleteByEmail(email);
+            throw new UserException("Invalid or expired password reset code.");
+        }
+
+        if (pendingReset.getOtpAttempts() >= MAX_OTP_ATTEMPTS) {
+            pendingPasswordResetRepository.deleteByEmail(email);
+            throw new UserException("Too many failed OTP attempts. Please request a new code.");
+        }
+
+        if (!pendingReset.getOtpCode().equals(otpCode)) {
+            pendingReset.setOtpAttempts(pendingReset.getOtpAttempts() + 1);
+            pendingPasswordResetRepository.save(pendingReset);
+            int remaining = MAX_OTP_ATTEMPTS - pendingReset.getOtpAttempts();
+            if (remaining <= 0) {
+                pendingPasswordResetRepository.deleteByEmail(email);
+                throw new UserException("Too many failed OTP attempts. Please request a new code.");
+            }
+            throw new UserException("Invalid OTP code. " + remaining + " attempt(s) remaining.");
+        }
+
+        User user = userRepository.findByEmailIgnoreCase(email)
+                .orElseThrow(() -> new UserException("Invalid or expired password reset code."));
+
+        user.setPassword(passwordEncoder.encode(newPassword));
+        user.setFailedLoginAttempts(0);
+        user.setLockoutTime(null);
+        userRepository.save(user);
+        pendingPasswordResetRepository.deleteByEmail(email);
+
+        Authentication authentication = new UsernamePasswordAuthenticationToken(user.getEmail(), null, List.of());
+        SecurityContextHolder.getContext().setAuthentication(authentication);
+        String jwt = tokenProvider.generateToken(authentication);
+        addJwtCookie(response, jwt);
+
+        LoginResponseDTO loginResponseDTO = LoginResponseDTO.builder()
+                .token(jwt)
+                .isAuthenticated(true)
+                .build();
+
+        log.info("Password reset completed for {}", email);
+
+        return new ResponseEntity<>(loginResponseDTO, HttpStatus.OK);
+    }
+
 @PostMapping("/signin")
     public ResponseEntity<LoginResponseDTO> login(@RequestBody LoginRequestDTO loginRequestDTO,
                                                     HttpServletResponse response) {
@@ -189,18 +301,11 @@ final String email = verifyOtpRequestDTO.email();
         final String password = loginRequestDTO.password();
 
         try {
-            Authentication authentication = authenticateReq(email, password);
+            Authentication authentication = authenticateReq(normalizeEmail(email), password);
             SecurityContextHolder.getContext().setAuthentication(authentication);
             String jwt = tokenProvider.generateToken(authentication);
 
-// Set JWT as httpOnly, SameSite cookie for XSS protection
-            Cookie jwtCookie = new Cookie("token", jwt);
-            jwtCookie.setHttpOnly(true);
-            jwtCookie.setSecure(isSecureCookie());
-            jwtCookie.setPath("/");
-            jwtCookie.setMaxAge(24 * 60 * 60); // 24 hours
-            jwtCookie.setAttribute("SameSite", "Lax");
-            response.addCookie(jwtCookie);
+            addJwtCookie(response, jwt);
 
             LoginResponseDTO loginResponseDTO = LoginResponseDTO.builder()
                     .token(jwt)
@@ -278,8 +383,11 @@ final String email = verifyOtpRequestDTO.email();
     private static final int LOCKOUT_MINUTES = 15;
 
     public Authentication authenticateReq(String username, String password) {
+        if (username == null) {
+            throw new BadCredentialsException("Invalid username");
+        }
 
-        User user = userRepository.findByEmail(username)
+        User user = userRepository.findByEmailIgnoreCase(username)
                 .orElseThrow(() -> new BadCredentialsException("Invalid username"));
 
         if (user.getLockoutTime() != null) {
@@ -309,6 +417,58 @@ final String email = verifyOtpRequestDTO.email();
 
 UserDetails userDetails = customUserDetailsService.loadUserByUsername(username);
         return new UsernamePasswordAuthenticationToken(userDetails, null, userDetails.getAuthorities());
+    }
+
+    private String generateOtpCode() {
+        return String.format("%06d", new Random().nextInt(1000000));
+    }
+
+    private boolean isPasswordResetRateLimited(String email, String clientIp) {
+        LocalDateTime now = LocalDateTime.now();
+        String emailKey = "email:" + email;
+        String ipKey = "ip:" + clientIp;
+
+        if (isCooldownActive(emailKey, now) || isCooldownActive(ipKey, now)) {
+            log.warn("Password reset OTP rate-limited for email={} ip={}", email, clientIp);
+            return true;
+        }
+
+        passwordResetOtpCooldowns.put(emailKey, now);
+        passwordResetOtpCooldowns.put(ipKey, now);
+        return false;
+    }
+
+    private boolean isCooldownActive(String key, LocalDateTime now) {
+        LocalDateTime lastSentAt = passwordResetOtpCooldowns.get(key);
+        if (lastSentAt == null) {
+            return false;
+        }
+        return lastSentAt.plus(PASSWORD_RESET_OTP_COOLDOWN).isAfter(now);
+    }
+
+    private String normalizeEmail(String email) {
+        if (email == null || email.isBlank()) {
+            return null;
+        }
+        return email.trim().toLowerCase();
+    }
+
+    private String clientIp(HttpServletRequest request) {
+        String forwardedFor = request.getHeader("X-Forwarded-For");
+        if (forwardedFor != null && !forwardedFor.isBlank()) {
+            return forwardedFor.split(",")[0].trim();
+        }
+        return request.getRemoteAddr();
+    }
+
+    private void addJwtCookie(HttpServletResponse response, String jwt) {
+        Cookie jwtCookie = new Cookie("token", jwt);
+        jwtCookie.setHttpOnly(true);
+        jwtCookie.setSecure(isSecureCookie());
+        jwtCookie.setPath("/");
+        jwtCookie.setMaxAge(24 * 60 * 60);
+        jwtCookie.setAttribute("SameSite", "Lax");
+        response.addCookie(jwtCookie);
     }
 
     /**
