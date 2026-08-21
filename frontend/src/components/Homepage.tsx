@@ -6,7 +6,7 @@ import {AppDispatch, RootState} from "../redux/Store";
 import {BASE_API_URL, TOKEN, WS_BASE_URL} from "../config/Config";
 import EditGroupChat from "./editChat/EditGroupChat";
 import Profile from "./profile/Profile";
-import {Alert, Avatar, Divider, IconButton, InputAdornment, Menu, MenuItem, TextField} from "@mui/material";
+import {Alert, Avatar, Divider, IconButton, InputAdornment, Menu, MenuItem, TextField, Button} from "@mui/material";
 import ChatIcon from '@mui/icons-material/Chat';
 import MoreVertIcon from '@mui/icons-material/MoreVert';
 import {currentUser, logoutUser} from "../redux/auth/AuthAction";
@@ -51,10 +51,20 @@ const Homepage = () => {
     const [messageReceived, setMessageReceived] = useState<boolean>(false);
     const [subscribeTry, setSubscribeTry] = useState<number>(1);
 const [missingKeysBanner, setMissingKeysBanner] = useState<boolean>(false);
+const onAcceptNewIdentity = async () => {
+        if (!identityChangedUserId || !token) return;
+        try {
+            await SessionRatchetService.acceptNewIdentityAndReset(identityChangedUserId, token);
+            setIdentityChangedUserId(null);
+        } catch (e) {
+            console.error('Failed to accept new identity:', e);
+        }
+    };
     const open = Boolean(anchor);
     // Holds the per-recipient ciphertext map for the in-flight message so the
     // WebSocket broadcast effect can deliver each member their own encrypted copy.
     const pendingPerRecipientContent = useRef<Record<string, { content: string; iv: string; ratchetHeader: string }> | null>(null);
+    const [identityChangedUserId, setIdentityChangedUserId] = useState<string | null>(null);
 
     useEffect(() => {
         if (token && !authState.reqUser) {
@@ -249,6 +259,11 @@ const ratchetHeaders: Record<string, string> = {};
 
             setNewMessage("");
         } catch (error) {
+            const { IdentityChangedError } = await import('../services/SessionRatchetService');
+            if (error instanceof IdentityChangedError) {
+                setIdentityChangedUserId(error.theirUserId);
+                return;
+            }
             setMissingKeysBanner(true);
             setTimeout(() => setMissingKeysBanner(false), 5000);
             console.error('[onSendMessage] Failed to encrypt and send message:', error);
@@ -407,6 +422,15 @@ const ratchetHeaders: Record<string, string> = {};
                         {missingKeysBanner && (
                             <Alert severity="warning" sx={{ position: 'absolute', top: 0, left: 0, right: 0, zIndex: 1000 }}>
                                 One or more chat members are missing a ratchet pre-key bundle. Message cannot be encrypted and sent until all members have uploaded one.
+                            </Alert>
+                        )}
+                        {identityChangedUserId && (
+                            <Alert
+                                severity="warning"
+                                sx={{ position: 'absolute', top: 0, left: 0, right: 0, zIndex: 1000 }}
+                                action={<Button color="inherit" size="small" onClick={onAcceptNewIdentity}>Trust new key</Button>}
+                            >
+                                This contact's security code changed (they may have reset their device). Tap "Trust new key" to keep messaging them.
                             </Alert>
                         )}
                         {!currentChat && <WelcomePage reqUser={authState.reqUser}/>}

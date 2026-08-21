@@ -11,6 +11,7 @@ import KeyManagementService from "../../services/KeyManagementService";
 import RecoveryService from "../../services/RecoveryService";
 import KeyStorageService from "../../services/KeyStorageService";
 import TelemetryService from "../../services/TelemetryService";
+import SessionRatchetService from "../../services/SessionRatchetService";
 
 type SignInRouteState = {
     forceNewDeviceCheck?: boolean;
@@ -187,7 +188,13 @@ const publicKeyBase64 = newRecord.curve25519PublicKey || newRecord.publicKey || 
             await RecoveryService.uploadRecoveryBlob(recoveryBlob, token);
 
             // Step 4: Upload the new pre-key bundle SECOND (awaited, not fire-and-forget dispatch)
-            await KeyManagementService.uploadPreKeyBundle(token);
+            await KeyManagementService.uploadPreKeyBundle(token, newRecord.curve25519PublicKey);
+
+            // Step 4b: Wipe stale sessions built under the OLD identity — otherwise old
+            // messages (and any that route through the stale chain) stay decryptable,
+            // silently defeating "start fresh."
+            await SessionRatchetService.clearAllPersistedSessionsForIdentityRegen();
+
 
             // Step 5: BOTH network calls succeeded — NOW persist to IndexedDB (atomic commit)
             await KeyManagementService.persistKeyRecord(newRecord);

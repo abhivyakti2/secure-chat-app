@@ -554,6 +554,27 @@ async savePreKey(record: StoredPreKeyRecord): Promise<void> {
         });
     }
 
+    async clearAllSentMessages(userId: string): Promise<void> {
+        const db = await this.openDb();
+        return new Promise((resolve, reject) => {
+            const tx = db.transaction(SENT_MESSAGES_STORE_NAME, "readwrite");
+            const store = tx.objectStore(SENT_MESSAGES_STORE_NAME);
+            const cursorReq = store.openCursor();
+            cursorReq.onsuccess = () => {
+                const cursor = cursorReq.result;
+                if (!cursor) return;
+                const record = cursor.value as StoredSentMessageRecord;
+                if (record.userId === userId) {
+                    cursor.delete();
+                }
+                cursor.continue();
+            };
+            cursorReq.onerror = () => reject(cursorReq.error);
+            tx.oncomplete = () => resolve();
+            tx.onerror = () => reject(tx.error);
+        });
+    }
+
     // ── Local Cache Key (per-user, device-scoped) ──
 
     /**

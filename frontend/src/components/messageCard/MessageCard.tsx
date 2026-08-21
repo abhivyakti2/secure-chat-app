@@ -1,11 +1,12 @@
 import {MessageDTO} from "../../redux/message/MessageModel";
 import {UserDTO} from "../../redux/auth/AuthModel";
 import styles from './MessageCard.module.scss';
-import {Chip} from "@mui/material";
+import {Button, Chip} from "@mui/material";
 import React, {useEffect, useState} from "react";
 import {getDateFormat} from "../utils/Utils";
-import SessionRatchetService from "../../services/SessionRatchetService";
+import SessionRatchetService, {IdentityChangedError} from "../../services/SessionRatchetService";
 import TelemetryService from "../../services/TelemetryService";
+import {TOKEN} from "../../config/Config";
 
 interface MessageCardProps {
     message: MessageDTO;
@@ -16,8 +17,11 @@ interface MessageCardProps {
 
 const MessageCard = (props: MessageCardProps) => {
 
+    
     const [decryptedContent, setDecryptedContent] = useState<string | null>(null);
     const [decryptError, setDecryptError] = useState<boolean>(false);
+    const [identityChanged, setIdentityChanged] = useState<boolean>(false);
+    const [retryTick, setRetryTick] = useState<number>(0);
 
     const isOwnMessage = props.message.user.id === props.reqUser?.id;
     const isRatchetMessage = props.message.encryptionFormat === 'ratchet' || !!props.message.ratchetHeader;
@@ -90,6 +94,7 @@ const MessageCard = (props: MessageCardProps) => {
                     headerKind,
                     headerSlice: props.message.ratchetHeader!.slice(0, 120),
                 });
+                
                 try {
                     const plaintext = await SessionRatchetService.ratchetDecrypt(
                         props.message.ratchetHeader!,
@@ -111,6 +116,18 @@ const MessageCard = (props: MessageCardProps) => {
                         headerKind,
                         error: (e as Error).message,
                     });
+                    if (e instanceof IdentityChangedError) {
+                        setIdentityChanged(true);
+                        setDecryptError(true);
+                        TelemetryService.logDecryptFailure({
+                            userId: myUserId,
+                            chatId: "",
+                            messageId: props.message.id.toString(),
+                            failureReason: "identity-changed",
+                            timestamp: new Date().toISOString(),
+                        }, null);
+                        return;
+                    }
                     setDecryptError(true);
                     TelemetryService.logDecryptFailure({
                         userId: myUserId,
@@ -127,7 +144,20 @@ const MessageCard = (props: MessageCardProps) => {
 
         setDecryptedContent(null);
         setDecryptError(false);
-    }, [props.message, props.reqUser, isOwnMessage, isRatchetMessage]);
+    }, [props.message, props.reqUser, isOwnMessage, isRatchetMessage, retryTick]);
+
+    const onAcceptNewIdentity = async () => {
+        const token = localStorage.getItem(TOKEN);
+        if (!token) return;
+        try {
+            await SessionRatchetService.acceptNewIdentityAndReset(props.message.user.id.toString(), token);
+            setIdentityChanged(false);
+            setDecryptError(false);
+            setRetryTick(t => t + 1);
+        } catch (err) {
+            console.error('[MessageCard] failed to accept new identity', err);
+        }
+    };
 
     const displayContent = isOwnMessage
         ? decryptedContent ?? (decryptError ? "🔒 Cannot decrypt" : "🔒 Loading...")
@@ -139,6 +169,11 @@ const MessageCard = (props: MessageCardProps) => {
         <div className={styles.bubbleContainer}>
             {props.isGroup && !isOwnMessage && <h4 className={styles.contentContainer}>{props.message.user.fullName}:</h4>}
             <p className={styles.contentContainer}>{displayContent}</p>
+            {identityChanged && !isOwnMessage && (
+                <Button size="small" variant="outlined" color="warning" onClick={onAcceptNewIdentity} sx={{mt: 0.5}}>
+                    Trust new security code
+                </Button>
+            )}
             <p className={styles.timeContainer}>{hours + ":" + minutes}</p>
         </div>
     );

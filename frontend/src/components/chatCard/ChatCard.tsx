@@ -19,7 +19,7 @@ const ChatCard = (props: ChatCardProps) => {
 
     const name: string = getChatName(props.chat, authState.reqUser);
     const initials: string = getInitialsFromName(name);
-    const sortedMessages: MessageDTO[] = props.chat.messages.sort((a, b) => +new Date(a.timeStamp) - +new Date(b.timeStamp));
+    const sortedMessages: MessageDTO[] = [...props.chat.messages].sort((a, b) => +new Date(a.timeStamp) - +new Date(b.timeStamp));
     const lastMessage: MessageDTO | undefined = sortedMessages.length > 0 ? sortedMessages[sortedMessages.length - 1] : undefined;
 
     useEffect(() => {

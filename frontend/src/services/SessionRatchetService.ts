@@ -59,6 +59,13 @@ interface SignedPreKeyMeta {
     nextRotationAt: string; // ISO date string
 }
 
+export class IdentityChangedError extends Error {
+    constructor(public theirUserId: string) {
+        super(`Identity key for ${theirUserId} has changed`);
+        this.name = 'IdentityChangedError';
+    }
+}
+
 export interface PreKeyBundleDTO {
     identityKey: string;
     signedPreKey: string;
@@ -158,6 +165,15 @@ async saveIdentity(_identifier: string, identityKey: ArrayBuffer, _nonblockingAp
 
     setKnownIdentities(identities: Map<string, string>): void {
         this._knownIdentities = new Map(identities);
+    }
+
+    // ── Custom helper: explicit user-approved identity override ──
+    async forceUpdateIdentity(identifier: string, identityKey: ArrayBuffer): Promise<void> {
+        const keyB64 = arrayBufferToBase64(identityKey);
+        this._knownIdentities.set(identifier, keyB64);
+        if (this._onIdentityPinned) {
+            await this._onIdentityPinned(identifier, keyB64).catch(() => {});
+        }
     }
 
     // ── PreKeyStore ──
@@ -323,9 +339,13 @@ class SessionRatchetService {
         curve25519PublicKey: string,
         deviceId: string
     ): Promise<void> {
-        if (this.currentUserId === userId && this.isLoaded) {
-            console.log(`[RATCHET] initialize: already initialized for userId=${userId}`);
-            return;
+        if (this.currentUserId === userId && this.isLoaded && this.identityKeyPair) {
+            const cachedPubKeyB64 = arrayBufferToBase64(this.identityKeyPair.pubKey);
+            if (cachedPubKeyB64 === curve25519PublicKey) {
+                console.log(`[RATCHET] initialize: already initialized for userId=${userId} with same identity`);
+                return;
+            }
+            console.log(`[RATCHET] initialize: identity CHANGED for userId=${userId}, forcing re-init`);
         }
         if (this.initPromise) {
             console.log(`[RATCHET] initialize: initialization already in progress, awaiting...`);
@@ -670,8 +690,12 @@ const identityPubKey = await this.store.getIdentityKeyPair();
         try {
             await sessionBuilder.processPreKey(preKeyBundle);
         } catch (error) {
+            const msg = error instanceof Error ? error.message : String(error);
             Logger.error('SessionRatchetService.initSession failed', error);
-            throw new Error('Failed to establish X3DH session: ' + (error as Error).message);
+            if (msg.toLowerCase().includes('identity')) {
+                throw new IdentityChangedError(theirUserId);
+            }
+            throw new Error('Failed to establish X3DH session: ' + msg);
         }
 
 // Persist session to IndexedDB (and ratchet keys so the device can decrypt
@@ -775,6 +799,24 @@ const identityPubKey = await this.store.getIdentityKeyPair();
             iv: arrayBufferToBase64(iv.buffer),
             ratchetHeader,
         };
+    }
+
+    async clearAllPersistedSessionsForIdentityRegen(): Promise<void> {
+        this.store.setSessionMap(new Map());
+        this.decryptedMessageCache.clear();
+        this.inFlightDecryptions.clear();
+        try {
+            await KeyStorageService.clearAllSessions();
+        } catch (error) {
+            Logger.warn('Failed to clear persisted sessions during identity regen:', error);
+        }
+        if (this.currentUserId) {
+            try {
+                await KeyStorageService.clearAllSentMessages(this.currentUserId);
+            } catch (error) {
+                Logger.warn('Failed to clear own sent-message cache during identity regen:', error);
+            }
+        }
     }
 
     /**
@@ -923,7 +965,14 @@ const identityPubKey = await this.store.getIdentityKeyPair();
 
                 // If decryption fails, the session may have been invalidated
                 // (e.g., user registered on a new device, replacing their pre-key bundle)
-                const errorMessage = error instanceof Error ? error.message : String(error);
+                                const errorMessage = error instanceof Error ? error.message : String(error);
+                if (
+                    errorMessage?.toLowerCase().includes('identity') ||
+                    (knownIdentity && header?.type === 3)
+                ) {
+                    console.warn(`[RATCHET] ratchetDecrypt: treating as identity change for sender=${theirUserId} (pinnedIdentityExists=${!!knownIdentity}, headerType=${header?.type}, rawError=${errorMessage})`);
+                    throw new IdentityChangedError(theirUserId);
+                }
                 if (errorMessage?.includes('session')) {
                     console.warn(`[RATCHET] ratchetDecrypt: dropping session for sender=${theirUserId} due to session error`);
                     await this.store.removeSession(theirAddress.toString());
@@ -1149,6 +1198,29 @@ console.log(`[RATCHET] _selectRatchetHeader: no body-match; headerKeys=${keys.jo
             groups.push(String(val).padStart(5, '0'));
         }
         return groups.join(' ');
+    }
+
+    /**
+     * Explicitly accept a contact's new identity key after the user has been warned.
+     * Re-pins the identity, discards the stale session so the next send/receive
+     * does fresh X3DH, and persists both changes.
+     */
+    async acceptNewIdentityAndReset(theirUserId: string, authToken: string): Promise<void> {
+        if (!this.currentUserId) throw new Error('SessionRatchetService not initialized');
+        const theirAddress = new SignalProtocolAddress(theirUserId, 1);
+
+        const bundleRes = await fetch(
+            `${BASE_API_URL}/api/users/${theirUserId}/pre-key-bundle`,
+            { headers: { Authorization: `${AUTHORIZATION_PREFIX}${authToken}` } }
+        );
+        if (!bundleRes.ok) throw new Error('Failed to fetch updated pre-key bundle for identity refresh');
+        const bundle: PreKeyBundleDTO = await bundleRes.json();
+
+        await this.store.forceUpdateIdentity(theirAddress.toString(), base64ToArrayBuffer(bundle.identityKey));
+        await this.store.removeSession(theirAddress.toString());
+        await this._flushSessionsToStorage();
+
+        Logger.cryptoEvent('SessionRatchetService.acceptNewIdentityAndReset', { theirUserId });
     }
 
     /**

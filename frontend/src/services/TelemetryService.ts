@@ -5,7 +5,7 @@ export interface DecryptFailureEvent {
     userId: string;
     chatId: string;
     messageId: string;
-    failureReason: "missing-iv" | "missing-encrypted-key" | "missing-ratchet-header" | "decrypt-threw" | "private-key-not-loaded" | "recovery-phrase-invalid" | "ratchet-decrypt-threw";
+    failureReason: "missing-iv" | "missing-encrypted-key" | "missing-ratchet-header" | "decrypt-threw" | "private-key-not-loaded" | "recovery-phrase-invalid" | "ratchet-decrypt-threw" | "identity-changed";
     timestamp: string;
 }
 

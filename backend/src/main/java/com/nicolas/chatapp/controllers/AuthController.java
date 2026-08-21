@@ -94,6 +94,7 @@ public class AuthController {
 
         // Remove any previous pending signup for this email (e.g. retry)
         pendingSignupRepository.deleteByEmail(email);
+        pendingSignupRepository.flush();
 
         PendingSignup pendingSignup = PendingSignup.builder()
                 .email(email)
@@ -208,6 +209,7 @@ final String email = normalizeEmail(verifyOtpRequestDTO.email());
             userRepository.findByEmailIgnoreCase(email).ifPresent(user -> {
                 String otpCode = generateOtpCode();
                 pendingPasswordResetRepository.deleteByEmail(email);
+                pendingPasswordResetRepository.flush();
                 PendingPasswordReset pendingReset = PendingPasswordReset.builder()
                         .email(email)
                         .otpCode(otpCode)
